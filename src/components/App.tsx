@@ -805,10 +805,6 @@ export default function App(): JSX.Element {
           name="viewport"
           content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
         />
-        <meta
-          name="base:app_id"
-          content="6a316f0306f4fa422358585d"
-        />
       </Head>
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
         <div className="max-w-lg mx-auto px-2 py-3">
