@@ -27,6 +27,7 @@ export default function ChartSection({
   vaultSymbol,
   isWalletConnected,
   chainId = base.id, // Use Base chain ID as default
+  refreshKey = 0,
 }: ChartSectionProps) {
   const [selectedChart, setSelectedChart] = useState<ChartType>(
     isWalletConnected ? "balance" : "tvl",
@@ -171,6 +172,18 @@ export default function ChartSection({
     }
   }, [vaultAddress, vaultKey]);
 
+  // Refetch user balance history after deposit/withdraw
+  useEffect(() => {
+    if (refreshKey === 0) return;
+
+    setUserBalanceHistoryData(null);
+    setChartData((prev) => ({
+      ...prev,
+      userBalance: undefined,
+    }));
+    setIsLoading(true);
+  }, [refreshKey]);
+
   // Separate useEffect for fetching user balance history
   useEffect(() => {
     if (!vaultAddress || !walletAddress || !isWalletConnected) {
@@ -201,7 +214,7 @@ export default function ChartSection({
         setIsUserBalanceHistoryLoading(false);
       });
     }
-  }, [vaultAddress, walletAddress, isWalletConnected, vaultKey]);
+  }, [vaultAddress, walletAddress, isWalletConnected, vaultKey, refreshKey]);
 
   // useEffect for loading chart data using the fetched histories
   useEffect(() => {

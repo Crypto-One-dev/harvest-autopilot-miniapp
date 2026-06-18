@@ -306,6 +306,48 @@ export async function fetchSharePriceData(
   }
 }
 
+function normalizeTimestamp(timestamp: string | number): number {
+  const ts = parseInt(String(timestamp));
+  return ts < 4102444800 ? ts * 1000 : ts;
+}
+
+/**
+ * Filter raw subgraph balance snapshots by period.
+ * Uses actual data points instead of slot resampling (which collapses
+ * recent user history to a single point on longer ranges like "All").
+ */
+function filterBalanceHistoryByPeriod(data: any[], period: string): any[] {
+  if (!data || data.length === 0) {
+    return [];
+  }
+
+  const sorted = [...data].sort(
+    (a, b) => Number(a.timestamp) - Number(b.timestamp),
+  );
+
+  const daysAgo = getRangeNumber(period);
+  if (daysAgo >= 9999) {
+    return sorted;
+  }
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const periodStartSec = nowSec - daysAgo * 24 * 60 * 60;
+
+  let startIndex = sorted.findIndex(
+    (item) => Number(item.timestamp) >= periodStartSec,
+  );
+
+  if (startIndex === -1) {
+    return sorted.slice(-1);
+  }
+
+  if (startIndex > 0) {
+    startIndex -= 1;
+  }
+
+  return sorted.slice(startIndex);
+}
+
 /**
  * Fetches user balance history for a specific vault
  * @param vaultAddress The vault address
@@ -344,36 +386,22 @@ export async function fetchUserBalanceData(
       return { balance: [] };
     }
 
-    // Filter data based on period using value as dataKey
-    const filteredBalanceData = filterDataByPeriod(
+    const filteredBalanceData = filterBalanceHistoryByPeriod(
       historyData,
       period,
-      "value",
     );
 
-    // If no data after filtering, return empty arrays
     if (filteredBalanceData.length === 0) {
       return { balance: [] };
     }
 
-    // Calculate the divisor based on vault decimals
     const divisor = Math.pow(10, vaultDecimals);
 
-    // Map to expected format for token balance
-    // Divide value by vault decimals
-    const balance = filteredBalanceData.map((item: any) => {
-      // Ensure timestamp is in milliseconds (convert if in seconds)
-      const timestamp = parseInt(item.timestamp);
-      // If timestamp is in seconds (< year 2100), convert to milliseconds
-      const timestampMs = timestamp < 4102444800 ? timestamp * 1000 : timestamp;
+    const balance = filteredBalanceData.map((item: any) => ({
+      timestamp: normalizeTimestamp(item.timestamp),
+      value: parseFloat(item.value || "0") / divisor,
+    }));
 
-      return {
-        timestamp: timestampMs,
-        value: parseFloat(item.value || "0") / divisor,
-      };
-    });
-
-    // Return only the balance data
     return { balance };
   } catch (error) {
     console.error("Error fetching user balance data:", error);

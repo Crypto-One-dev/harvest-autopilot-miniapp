@@ -338,11 +338,13 @@ export default function UserBalanceChart({
   });
 
   // Calculate min and max values for better scaling
+  const maxTokenValue = Math.max(...chartData.map((item) => item.tokenValue), 0);
   const tokenMin = 0;
-  const tokenMax = Math.max(...chartData.map((item) => item.tokenValue)) * 1.1; // Add 10% headroom
+  const tokenMax = maxTokenValue === 0 ? 1 : maxTokenValue * 1.1;
 
+  const maxUsdValue = Math.max(...chartData.map((item) => item.usdValue), 0);
   const usdMin = 0;
-  const usdMax = Math.max(...chartData.map((item) => item.usdValue)) * 1.3; // Add 30% headroom
+  const usdMax = maxUsdValue === 0 ? 1 : maxUsdValue * 1.3;
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow">
