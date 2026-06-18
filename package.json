@@ -15,19 +15,22 @@
   },
   "dependencies": {
     "@apollo/client": "^3.11.10",
-    "@farcaster/frame-core": "^0.1.1",
-    "@farcaster/frame-sdk": "^0.0.52",
-    "@farcaster/frame-wagmi-connector": "^0.0.41",
+    "@base-org/account": "^2.5.6",
+    "@coinbase/wallet-sdk": "^4.3.7",
     "@tanstack/react-query": "^5.61.0",
+    "@wagmi/connectors": "^8.0.16",
+    "@wagmi/core": "^3.5.1",
     "axios": "^1.9.0",
     "googleapis": "^144.0.0",
     "graphql": "^16.0.0",
     "next": "^15.0.5",
+    "ox": "^0.14.29",
     "react": "18.2.0",
     "react-dom": "18.2.0",
     "recharts": "^2.15.3",
     "viem": "2.x",
-    "wagmi": "^2.13.0"
+    "wagmi": "^3.6.17",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@types/node": "^20",
@@ -43,6 +46,6 @@
     "tailwindcss": "^3.4.17",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
-    "typescript": "^5"
+    "typescript": "^5.9.3"
   }
 }

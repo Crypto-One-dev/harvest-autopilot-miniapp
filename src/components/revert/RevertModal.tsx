@@ -3,16 +3,13 @@ import { useSendTransaction, useWaitForTransactionReceipt } from "wagmi";
 import { Button } from "../Button";
 import { RevertModalProps } from "~/types";
 import { usePortals } from "~/providers/Portals";
-import { formatBalance, truncateAddress } from "~/utilities/parsers";
-import { parseUnits } from "viem";
+import { formatBalance, truncateAddress, parseTokenUnits } from "~/utilities/parsers";
 import BigNumber from "bignumber.js";
-import sdk from "@farcaster/frame-sdk";
 
 export default function RevertModal({
   chainId,
   isOpen,
   onClose,
-  fid,
   selectedToken,
   withdrawAmount,
   selectedVault,
@@ -32,7 +29,7 @@ export default function RevertModal({
 
   const { portalsApprove, getPortals, getPortalsApproval, getPortalsEstimate } =
     usePortals();
-  const { sendTransactionAsync } = useSendTransaction();
+  const sendTransaction = useSendTransaction();
   const { isLoading: isConfirming, isSuccess: isConfirmed } =
     useWaitForTransactionReceipt({
       hash: txHash as `0x${string}`,
@@ -47,7 +44,7 @@ export default function RevertModal({
         withdrawAmount || "0",
       ).toString();
 
-      const value = parseUnits(safeWithdrawAmount, selectedVault.vaultDecimals);
+      const value = parseTokenUnits(safeWithdrawAmount, selectedVault.vaultDecimals);
 
       const approval = await getPortalsApproval(
         chainId,
@@ -98,7 +95,7 @@ export default function RevertModal({
           // Ensure withdrawAmount is a valid number string before parsing
           const safeWithdrawAmount = new BigNumber(withdrawAmount).toString();
 
-          const value = parseUnits(
+          const value = parseTokenUnits(
             safeWithdrawAmount,
             selectedVault.vaultDecimals,
           );
@@ -167,7 +164,6 @@ export default function RevertModal({
           },
           body: JSON.stringify({
             action: "revert",
-            fid: fid,
             tokenSymbol: selectedToken.symbol,
             tokenAddress: selectedToken.address,
             amount: withdrawAmount,
@@ -193,7 +189,6 @@ export default function RevertModal({
     chainId,
     walletAddress,
     checkApproval,
-    fid,
     analyticsSent,
     onSuccess,
   ]);
@@ -272,22 +267,10 @@ export default function RevertModal({
           withdrawAmount || "0",
         ).toString();
 
-        const value = parseUnits(
+        const value = parseTokenUnits(
           safeWithdrawAmount,
           selectedVault.vaultDecimals,
         );
-
-        // Request wallet authorization first
-        const provider = await sdk.wallet.getEthereumProvider();
-        if (!provider) throw new Error("No provider available");
-
-        try {
-          // Request account access
-          await provider.request({ method: "eth_requestAccounts" });
-        } catch (authError) {
-          console.error("Authorization error:", authError);
-          throw new Error("Please authorize the wallet to proceed");
-        }
 
         const approvalData = await portalsApprove(
           chainId,
@@ -299,7 +282,7 @@ export default function RevertModal({
           throw new Error("Failed to get approval data from Portals");
         }
 
-        const hash = await sendTransactionAsync({
+        const hash = await sendTransaction.mutateAsync({
           to: approvalData.approve.to as `0x${string}`,
           data: approvalData.approve.data as `0x${string}`,
         });
@@ -341,22 +324,10 @@ export default function RevertModal({
           withdrawAmount || "0",
         ).toString();
 
-        const value = parseUnits(
+        const value = parseTokenUnits(
           safeWithdrawAmount,
           selectedVault.vaultDecimals,
         );
-
-        // Request wallet authorization first
-        const provider = await sdk.wallet.getEthereumProvider();
-        if (!provider) throw new Error("No provider available");
-
-        try {
-          // Request account access
-          await provider.request({ method: "eth_requestAccounts" });
-        } catch (authError) {
-          console.error("Authorization error:", authError);
-          throw new Error("Please authorize the wallet to proceed");
-        }
 
         const portalData = await getPortals({
           chainId,
@@ -371,7 +342,7 @@ export default function RevertModal({
           throw new Error("Failed to get portal data from Portals");
         }
 
-        const hash = await sendTransactionAsync({
+        const hash = await sendTransaction.mutateAsync({
           to: portalData.tx.to as `0x${string}`,
           data: portalData.tx.data as `0x${string}`,
           value: portalData.tx.value ? BigInt(portalData.tx.value) : BigInt(0),

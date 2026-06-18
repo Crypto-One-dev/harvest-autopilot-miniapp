@@ -2,9 +2,15 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import Head from "next/head";
 import type { JSX } from "react";
 import BigNumber from "bignumber.js";
-import sdk from "@farcaster/frame-sdk";
 import { Button } from "~/components/Button";
-import { base } from "wagmi/chains";
+import { base } from "viem/chains";
+import {
+  useConnection,
+  useConnect,
+  useConnectors,
+  useSwitchChain,
+  type Connector,
+} from "wagmi";
 import ConvertTokenSelectModal from "./convert/TokenSelectModal";
 import RevertTokenSelectModal from "./revert/TokenSelectModal";
 import ConvertModal from "./convert/ConvertModal";
@@ -19,8 +25,10 @@ import { SUPPORTED_VAULTS, FALLBACK_TOKEN_ICON } from "~/constants";
 
 export default function App(): JSX.Element {
   const { vaultsData } = useVaultsData();
-  const [isSDKLoaded, setIsSDKLoaded] = useState(false);
-  const [fid, setFid] = useState<number>(0);
+  const { address, isConnected, chainId: connectedChainId } = useConnection();
+  const connect = useConnect();
+  const connectors = useConnectors();
+  const { mutate: switchToBaseChain } = useSwitchChain();
   const [selectedVault, setSelectedVault] = useState<string | null>("USDC");
   const [vaultBalances, setVaultBalances] = useState<{
     [key: string]: TokenInfo | null;
@@ -47,20 +55,15 @@ export default function App(): JSX.Element {
   const [tokenBalances, setTokenBalances] = useState<TokenInfo[]>([]);
   const { getPortalsBalances, SUPPORTED_TOKEN_LIST, getPortalsBaseTokens } =
     usePortals();
-  const [walletAddress, setWalletAddress] = useState<`0x${string}` | null>(
-    null,
-  );
-  const [isWalletConnected, setIsWalletConnected] = useState(false);
+  const walletAddress = address ?? null;
+  const isWalletConnected = isConnected;
   const chainId: number = base.id;
-  const [sdkError, setSdkError] = useState<string | null>(null);
   const [supportedTokens, setSupportedTokens] = useState<TokenInfo[]>([]);
   const [isBalanceLoading, setIsBalanceLoading] = useState(false);
-  const [isWalletInteracting, setIsWalletInteracting] = useState(false);
   const [notification, setNotification] = useState<{
     message: string;
     type: "error" | "success";
   } | null>(null);
-  const POLLING_INTERVAL = 5000; // 5 seconds polling interval
   const [activeVault, setActiveVault] = useState<VaultInfo | null>(null);
   const [isAmountModalOpen, setIsAmountModalOpen] = useState(false);
   const [currentAction, setCurrentAction] = useState<"deposit" | "withdraw">(
@@ -109,129 +112,28 @@ export default function App(): JSX.Element {
 
   // Handle wallet interactions
   const handleWalletInteraction = async (action: () => Promise<void>) => {
-    try {
-      setIsWalletInteracting(true);
-      await action();
-    } finally {
-      // Add a small delay before re-enabling polling
-      setTimeout(() => {
-        setIsWalletInteracting(false);
-      }, 2000); // 2 second delay
-    }
+    await action();
   };
 
-  // Polling mechanism to detect wallet changes
+  // Switch to Base chain if needed
   useEffect(() => {
-    let isComponentMounted = true;
-    let pollInterval: NodeJS.Timeout | null = null;
-    let lastCheckedAddress: string | null = null;
-
-    const checkWalletChanges = async () => {
-      if (!isComponentMounted || isWalletInteracting) return;
-
-      try {
-        const provider = await sdk.wallet.getEthereumProvider();
-        if (!provider) return;
-
-        // Only check for account changes, not balances
-        const accounts = await provider.request({ method: "eth_accounts" });
-        const newAddress = accounts?.[0]?.toLowerCase() || null;
-
-        // Return early if address hasn't changed
-        if (newAddress === lastCheckedAddress) {
-          return;
-        }
-
-        // Update our last checked address
-        lastCheckedAddress = newAddress;
-
-        if (newAddress) {
-          setWalletAddress(newAddress as `0x${string}`);
-          setIsWalletConnected(true);
-
-          // Start polling if not already polling
-          if (!pollInterval) {
-            pollInterval = setInterval(checkWalletChanges, POLLING_INTERVAL);
-          }
-        } else {
-          setWalletAddress(null);
-          setIsWalletConnected(false);
-          setTokenBalances([]);
-          setVaultBalances({});
-          setSupportedTokens([]);
-
-          // Clear polling if wallet disconnected
-          if (pollInterval) {
-            clearInterval(pollInterval);
-            pollInterval = null;
-          }
-        }
-      } catch (error) {
-        console.error("Failed to check wallet changes:", error);
-        // Clear polling on error
-        if (pollInterval) {
-          console.log("Clearing polling interval - error occurred");
-          clearInterval(pollInterval);
-          pollInterval = null;
-        }
-      }
-    };
-
-    // Run initial check
-    checkWalletChanges();
-
-    // Cleanup function
-    return () => {
-      isComponentMounted = false;
-      if (pollInterval) {
-        clearInterval(pollInterval);
-      }
-    };
-  }, [isWalletInteracting]); // Add isWalletInteracting to dependencies
-
-  // Load SDK and connect
-  useEffect(() => {
-    const load = async () => {
-      try {
-        // Initialize SDK with error handling
-        try {
-          const frameContext = await sdk.context;
-          setFid(frameContext?.user?.fid);
-          if (!frameContext) {
-            setSdkError("Please open this app in Warpcast");
-            return;
-          }
-
-          const provider = await sdk.wallet.getEthereumProvider();
-          if (!provider) {
-            setSdkError("Failed to get wallet provider");
-            return;
-          }
-
-          // Get initial accounts
-          const accounts = await provider.request({ method: "eth_accounts" });
-          if (accounts && accounts[0]) {
-            const address = accounts[0].toLowerCase() as `0x${string}`;
-            setWalletAddress(address);
-            setIsWalletConnected(true);
-          }
-
-          await sdk.actions.ready();
-        } catch (error: unknown) {
-          console.error("Farcaster SDK Error:", error);
-          return;
-        }
-      } catch (error) {
-        console.error("SDK initialization error:", error);
-        setSdkError("Failed to initialize. Please try again.");
-      }
-    };
-
-    if (!isSDKLoaded) {
-      setIsSDKLoaded(true);
-      load();
+    if (
+      isWalletConnected &&
+      connectedChainId &&
+      connectedChainId !== base.id
+    ) {
+      switchToBaseChain({ chainId: base.id });
     }
-  }, [isSDKLoaded]);
+  }, [isWalletConnected, connectedChainId, switchToBaseChain]);
+
+  // Clear balances when wallet disconnects
+  useEffect(() => {
+    if (!isWalletConnected) {
+      setTokenBalances([]);
+      setVaultBalances({});
+      setSupportedTokens([]);
+    }
+  }, [isWalletConnected]);
 
   // Fetch balances function
   const fetchBalances = useCallback(async () => {
@@ -519,26 +421,6 @@ export default function App(): JSX.Element {
     return symbolMap[symbol] || symbol;
   };
 
-  // Switch to Base chain if needed
-  useEffect(() => {
-    const switchToBase = async () => {
-      if (chainId !== base.id && isWalletConnected) {
-        try {
-          const provider = await sdk.wallet.getEthereumProvider();
-          if (provider) {
-            await provider.request({
-              method: "wallet_switchEthereumChain",
-              params: [{ chainId: `0x${base.id.toString(16)}` }],
-            });
-          }
-        } catch (error) {
-          console.error("Failed to switch to Base:", error);
-        }
-      }
-    };
-    switchToBase();
-  }, [chainId, isWalletConnected]);
-
   // Handle deposit from vault card
   const handleDepositClick = (vault: VaultInfo) => {
     setSelectedVault(vault.symbol);
@@ -706,61 +588,15 @@ export default function App(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isWalletConnected, walletAddress, vaultBalances]);
 
-  // Early return for SDK errors with custom UI
-  if (sdkError) {
-    return (
-      <div className="w-[300px] mx-auto pt-16 px-2">
-        <h1 className="text-2xl font-bold text-center mb-4">
-          Harvest on Autopilot 🌾
-        </h1>
-        <div className="p-4 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
-          <p className="text-sm text-red-600 dark:text-red-400 text-center">
-            {sdkError}
-          </p>
-          {sdkError.includes("reconnect") && (
-            <div className="mt-4 flex justify-center">
-              <Button
-                onClick={() => {
-                  window.location.reload();
-                }}
-              >
-                Reconnect
-              </Button>
-            </div>
-          )}
-          {sdkError.includes("Warpcast") && (
-            <div className="mt-4 flex justify-center">
-              <Button
-                onClick={() => {
-                  window.location.href =
-                    "https://farcaster.xyz/~/developers/mini-apps/manifest";
-                }}
-              >
-                Open in Warpcast
-              </Button>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  // Loading state
-  if (!isSDKLoaded) {
-    return (
-      <div className="w-[300px] mx-auto pt-16 px-2">
-        <h1 className="text-2xl font-bold text-center mb-4">
-          Harvest on Autopilot 🌾
-        </h1>
-        <div className="animate-pulse flex flex-col items-center gap-4">
-          <div className="w-12 h-12 rounded-full border-4 border-purple-600 border-t-transparent animate-spin" />
-          <div className="text-lg font-medium text-gray-600 dark:text-gray-300">
-            Loading...
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const handleConnectWallet = () => {
+    const connector: Connector | undefined =
+      connectors.find((c: Connector) => c.id === "baseAccount") ??
+      connectors.find((c: Connector) => c.id === "injected") ??
+      connectors[0];
+    if (connector) {
+      connect.mutate({ connector });
+    }
+  };
 
   // Not connected state with custom UI
   if (!isWalletConnected) {
@@ -773,25 +609,8 @@ export default function App(): JSX.Element {
           <p className="text-center text-gray-600 dark:text-gray-400">
             Please connect your wallet to view your positions
           </p>
-          <Button
-            onClick={async () => {
-              try {
-                const provider = await sdk.wallet.getEthereumProvider();
-                if (provider) {
-                  const accounts = await provider.request({
-                    method: "eth_requestAccounts",
-                  });
-                  if (accounts && accounts[0]) {
-                    setWalletAddress(accounts[0] as `0x${string}`);
-                    setIsWalletConnected(true);
-                  }
-                }
-              } catch (error) {
-                console.error("Failed to connect wallet:", error);
-              }
-            }}
-          >
-            Connect Wallet
+          <Button onClick={handleConnectWallet} disabled={connect.isPending}>
+            {connect.isPending ? "Connecting..." : "Connect Wallet"}
           </Button>
         </div>
       </div>
@@ -1086,7 +905,6 @@ export default function App(): JSX.Element {
           chainId={chainId}
           isOpen={isConvertModalOpen}
           onClose={() => setIsConvertModalOpen(false)}
-          fid={fid}
           selectedToken={selectedToken}
           depositAmount={depositAmount}
           vaultAddress={vaultAddress}
@@ -1101,7 +919,6 @@ export default function App(): JSX.Element {
           chainId={chainId}
           isOpen={isRevertModalOpen}
           onClose={() => setIsRevertModalOpen(false)}
-          fid={fid}
           selectedToken={selectedToken}
           withdrawAmount={depositAmount}
           selectedVault={activeVault}
