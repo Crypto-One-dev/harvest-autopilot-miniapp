@@ -71,6 +71,7 @@ export default function App(): JSX.Element {
   );
   const [selectedChartVault, setSelectedChartVault] =
     useState<VaultInfo | null>(null);
+  const [chartRefreshKey, setChartRefreshKey] = useState(0);
 
   // Add a ref for the chart section
   const chartSectionRef = useRef<HTMLDivElement>(null);
@@ -315,6 +316,7 @@ export default function App(): JSX.Element {
     setDepositAmount("0");
     await fetchBalances();
     await fetchSupportedTokens();
+    setChartRefreshKey((key) => key + 1);
 
     if (!walletAddress) return;
 
@@ -383,6 +385,7 @@ export default function App(): JSX.Element {
     setVaultBalances({});
     await fetchBalances();
     await fetchSupportedTokens(); // Add this line to fetch supported tokens after revert
+    setChartRefreshKey((key) => key + 1);
 
     if (!walletAddress) return;
 
@@ -818,6 +821,7 @@ export default function App(): JSX.Element {
                   vaultSymbol={selectedChartVault.vaultSymbol}
                   isWalletConnected={isWalletConnected}
                   chainId={chainId}
+                  refreshKey={chartRefreshKey}
                 />
               </div>
             )}

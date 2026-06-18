@@ -144,6 +144,7 @@ export interface ChartSectionProps {
   vaultSymbol: string;
   isWalletConnected: boolean;
   chainId?: number; // Make chainId optional with a default value
+  refreshKey?: number;
 }
 
 // Interface for cached chart data
