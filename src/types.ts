@@ -41,7 +41,6 @@ export interface Token {
 
 export interface AnalyticsData {
   action: string;
-  fid: number;
   tokenSymbol: string;
   tokenAddress: string;
   amount: string;
@@ -57,7 +56,6 @@ export interface ConvertModalProps {
   chainId: number;
   isOpen: boolean;
   onClose: () => void;
-  fid: number;
   selectedToken: TokenInfo;
   depositAmount: string;
   vaultAddress: `0x${string}` | null;
@@ -70,7 +68,6 @@ export interface RevertModalProps {
   chainId: number;
   isOpen: boolean;
   onClose: () => void;
-  fid: number | undefined;
   selectedToken: TokenInfo;
   withdrawAmount: string;
   selectedVault: VaultInfo;

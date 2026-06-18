@@ -5,7 +5,6 @@ async function testWriteAnalyticsToSheet() {
   const spreadsheetId = "1N7nsUtZtcyX2x3uSW7PHz9lWGfU1rqL9kRLsy9-wTNA"; // Replace with your actual spreadsheet ID
   const testData = {
     action: "test_action",
-    fid: 123,
     tokenSymbol: "TEST",
     tokenAddress: "0x1234567890123456789012345678901234567890",
     amount: "100",

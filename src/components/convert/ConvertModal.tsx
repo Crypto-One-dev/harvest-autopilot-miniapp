@@ -3,17 +3,14 @@ import { useSendTransaction, useWaitForTransactionReceipt } from "wagmi";
 import { Button } from "../Button";
 import { ConvertModalProps } from "~/types";
 import { usePortals } from "~/providers/Portals";
-import { formatBalance, truncateAddress } from "~/utilities/parsers";
-import { parseUnits } from "viem";
+import { formatBalance, truncateAddress, parseTokenUnits } from "~/utilities/parsers";
 import BigNumber from "bignumber.js";
-import sdk from "@farcaster/frame-sdk";
 import { SUPPORTED_VAULTS } from "~/constants";
 
 export default function ConvertModal({
   chainId,
   isOpen,
   onClose,
-  fid,
   selectedToken,
   depositAmount,
   vaultAddress,
@@ -31,7 +28,7 @@ export default function ConvertModal({
   const [analyticsSent, setAnalyticsSent] = useState(false);
 
   const { portalsApprove, getPortals, getPortalsApproval } = usePortals();
-  const { sendTransactionAsync } = useSendTransaction();
+  const sendTransaction = useSendTransaction();
   const { isLoading: isConfirming, isSuccess: isConfirmed } =
     useWaitForTransactionReceipt({
       hash: txHash as `0x${string}`,
@@ -44,7 +41,7 @@ export default function ConvertModal({
       // Ensure depositAmount is a valid number string before parsing
       const safeDepositAmount = new BigNumber(depositAmount || "0").toString();
 
-      const value = parseUnits(safeDepositAmount, selectedToken.decimals);
+      const value = parseTokenUnits(safeDepositAmount, selectedToken.decimals);
 
       // Check if this is native ETH (multiple possible representations)
       const isNativeETH =
@@ -138,7 +135,6 @@ export default function ConvertModal({
           },
           body: JSON.stringify({
             action: "convert",
-            fid: fid,
             tokenSymbol: selectedToken.symbol,
             tokenAddress: selectedToken.address,
             amount: depositAmount,
@@ -163,7 +159,6 @@ export default function ConvertModal({
     walletAddress,
     checkApproval,
     onSuccess,
-    fid,
     analyticsSent,
   ]);
 
@@ -230,19 +225,7 @@ export default function ConvertModal({
           depositAmount || "0",
         ).toString();
 
-        const value = parseUnits(safeDepositAmount, selectedToken.decimals);
-
-        // Request wallet authorization first
-        const provider = await sdk.wallet.getEthereumProvider();
-        if (!provider) throw new Error("No provider available");
-
-        try {
-          // Request account access
-          await provider.request({ method: "eth_requestAccounts" });
-        } catch (authError) {
-          console.error("Authorization error:", authError);
-          throw new Error("Please authorize the wallet to proceed");
-        }
+        const value = parseTokenUnits(safeDepositAmount, selectedToken.decimals);
 
         const approvalData = await portalsApprove(
           chainId,
@@ -272,7 +255,7 @@ export default function ConvertModal({
           return;
         }
 
-        const hash = await sendTransactionAsync({
+        const hash = await sendTransaction.mutateAsync({
           to: approvalData.approve.to as `0x${string}`,
           data: approvalData.approve.data as `0x${string}`,
         });
@@ -311,19 +294,7 @@ export default function ConvertModal({
           depositAmount || "0",
         ).toString();
 
-        const value = parseUnits(safeDepositAmount, selectedToken.decimals);
-
-        // Request wallet authorization first
-        const provider = await sdk.wallet.getEthereumProvider();
-        if (!provider) throw new Error("No provider available");
-
-        try {
-          // Request account access
-          await provider.request({ method: "eth_requestAccounts" });
-        } catch (authError) {
-          console.error("Authorization error:", authError);
-          throw new Error("Please authorize the wallet to proceed");
-        }
+        const value = parseTokenUnits(safeDepositAmount, selectedToken.decimals);
 
         // Ensure we have valid addresses before proceeding
         const tokenInAddress = selectedToken.address;
@@ -346,7 +317,7 @@ export default function ConvertModal({
           throw new Error("Failed to get portal data from Portals");
         }
 
-        const hash = await sendTransactionAsync({
+        const hash = await sendTransaction.mutateAsync({
           to: portalData.tx.to as `0x${string}`,
           data: portalData.tx.data as `0x${string}`,
           value: portalData.tx.value ? BigInt(portalData.tx.value) : BigInt(0),

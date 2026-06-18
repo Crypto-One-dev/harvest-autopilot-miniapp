@@ -34,3 +34,9 @@ export const truncateAddress = (address: string) => {
   if (!address) return "";
   return `${address.slice(0, 14)}...${address.slice(-12)}`;
 };
+
+export function parseTokenUnits(value: string, decimals: number): bigint {
+  const [whole = "0", fraction = ""] = value.split(".");
+  const normalizedFraction = fraction.padEnd(decimals, "0").slice(0, decimals);
+  return BigInt(`${whole}${normalizedFraction}`);
+}

@@ -4,7 +4,7 @@ import TVLChart from "./TVLChart";
 import APYChart from "./APYChart";
 import SharePriceChart from "./SharePriceChart";
 import UserBalanceChart from "./UserBalanceChart";
-import { base } from "wagmi/chains";
+import { base } from "viem/chains";
 import { SUPPORTED_VAULTS } from "~/constants";
 import {
   fetchAllChartData,

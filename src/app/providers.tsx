@@ -1,8 +1,12 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { PropsWithChildren } from "react";
 import { PortalsProvider } from "~/providers/Portals";
-import WagmiAppProvider from "~/providers/Wagmi";
+
+const WagmiAppProvider = dynamic(() => import("~/providers/Wagmi"), {
+  ssr: false,
+});
 
 export function Providers({ children }: PropsWithChildren) {
   return (

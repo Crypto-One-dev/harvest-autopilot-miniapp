@@ -1,14 +1,32 @@
 /** @type {import('next').NextConfig} */
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const path = require("path");
+
 const nextConfig = {
+  transpilePackages: ["wagmi", "@wagmi/core", "@wagmi/connectors"],
+  webpack: (config, { isServer }) => {
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      "@wagmi-connectors/baseAccount": path.resolve(
+        __dirname,
+        "node_modules/@wagmi/connectors/dist/esm/baseAccount.js",
+      ),
+    };
+
+    if (!isServer) {
+      config.resolve.alias["@base-org/account"] = path.resolve(
+        __dirname,
+        "node_modules/@base-org/account/dist/index.js",
+      );
+    }
+
+    return config;
+  },
   async headers() {
     return [
       {
         source: "/:path*",
         headers: [
-          {
-            key: "Access-Control-Allow-Origin",
-            value: "https://wallet.farcaster.xyz",
-          },
           {
             key: "Access-Control-Allow-Methods",
             value: "GET, POST, PUT, DELETE, OPTIONS",
@@ -26,27 +44,14 @@ const nextConfig = {
             value: `
               default-src 'self';
               connect-src 'self' 
-                https://farcaster.xyz 
-                https://client.farcaster.xyz 
-                https://warpcast.com 
-                https://client.warpcast.com 
-                https://wrpcd.net 
-                https://*.wrpcd.net 
-                https://privy.farcaster.xyz 
-                https://privy.warpcast.com 
-                https://auth.privy.io 
-                https://*.rpc.privy.systems 
-                https://cloudflareinsights.com 
-                https://explorer-api.walletconnect.com/* 
-                https://*.walletconnect.com/* 
-                https://*.walletconnect.org/* 
+                https://base.app
+                https://*.coinbase.com
                 https://*.base.org 
                 https://mainnet.base.org 
                 https://1rpc.io 
                 wss://*.base.org 
                 ws://*.base.org 
                 http://*.base.org 
-                https://*.base.org 
                 https://relay.walletconnect.com/* 
                 https://registry.walletconnect.com/* 
                 https://verify.walletconnect.com/* 
@@ -56,16 +61,13 @@ const nextConfig = {
                 https://*.portals.fi
                 https://api.harvest.finance/*
                 https://*.harvest.finance/*
-                https://wallet.farcaster.xyz/*
-                https://*.farcaster.xyz/*
-                https://*.warpcast.com/*
                 https://base-mainnet.g.alchemy.com
                 https://*.alchemy.com;
-              script-src 'self' 'unsafe-eval' 'unsafe-inline' https://wallet.farcaster.xyz https://client.warpcast.com;
+              script-src 'self' 'unsafe-eval' 'unsafe-inline';
               style-src 'self' 'unsafe-inline';
               img-src 'self' data: https: blob:;
               font-src 'self' data:;
-              frame-src 'self' https://wallet.farcaster.xyz https://*.walletconnect.com https://*.warpcast.com;
+              frame-src 'self' https://*.walletconnect.com;
               worker-src 'self' blob:;
             `
               .replace(/\s+/g, " ")
@@ -76,15 +78,6 @@ const nextConfig = {
     ];
   },
   reactStrictMode: true,
-  async redirects() {
-    return [
-      {
-        source: '/.well-known/farcaster.json',
-        destination: 'https://api.farcaster.xyz/miniapps/hosted-manifest/01988542-1f43-5ec8-068f-80e352239e6e',
-        permanent: false,
-      },
-    ]
-  },
 };
 
 module.exports = nextConfig;

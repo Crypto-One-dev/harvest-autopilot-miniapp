@@ -1,6 +1,6 @@
 # Harvest on Autopilot 🌾
 
-A DeFi mini-app built for Farcaster Frames that enables users to easily convert their tokens into yield-bearing vault tokens and back. The app provides a seamless experience for managing DeFi positions with a focus on mobile responsiveness and accessibility.
+A DeFi mini-app for the [Base App](https://base.app) that enables users to easily convert tokens into yield-bearing vault tokens and back. Built as a standard web app with wagmi and Base Account wallet integration.
 
 ## Features
 
@@ -11,7 +11,7 @@ A DeFi mini-app built for Farcaster Frames that enables users to easily convert 
 - **Accessibility**: ARIA-compliant with proper labels and descriptions
 - **Dark Mode Support**: Seamless experience in both light and dark modes
 - **Transaction Tracking**: View and track your transaction status with links to block explorer
-- **Native Farcaster Integration**: Seamless wallet connection through Farcaster Frame
+- **Base App Integration**: Wallet connection via Base Account and wagmi v3
 - **View Vault Analytics**: Interactive charts to monitor vault performance
 - **Monitor User Positions**: Track user balances and positions
 
@@ -26,8 +26,8 @@ Currently supports the following vaults on Base:
 ## Technical Stack
 
 - **Framework**: Next.js
-- **Blockchain Integration**: wagmi, viem
-- **Wallet Connection**: Farcaster Frame SDK
+- **Blockchain Integration**: wagmi v3, viem, `@base-org/account`
+- **Wallet Connection**: Base Account connector + injected wallets
 - **Styling**: Tailwind CSS
 - **State Management**: React Hooks
 - **Price Data**: Portals API
@@ -60,7 +60,7 @@ Currently supports the following vaults on Base:
 ## Security Features
 
 - Content Security Policy (CSP) compliance
-- Secure wallet connections through Farcaster Frame
+- Secure wallet connections through wagmi
 - Protected API endpoints
 - Safe transaction handling
 - Input validation and sanitization
@@ -82,7 +82,8 @@ Currently supports the following vaults on Base:
 npm install
 ```
 
-3. Run the development server:
+3. Create a `.env.local` file with required environment variables (see `.env` for examples)
+4. Run the development server:
 
 ```bash
 npm run dev
@@ -117,19 +118,17 @@ The CI pipeline runs on:
 - Every push to the master branch
 - Every pull request to the master branch
 
-To set up CI:
-
-1. Fork the repository
-2. Enable GitHub Actions in your repository settings
-3. Push to the master branch or create a pull request to trigger the workflow
-
 ## Usage
 
-1. Open the app in Farcaster Frame
-2. Connect your wallet through Farcaster
+1. Open the app in the Base App or a web browser
+2. Connect your wallet
 3. Select a vault (USDC, WETH, or cbBTC)
 4. Choose whether to convert tokens to vault tokens or withdraw from vault
 5. Enter the amount you want to convert/withdraw
 6. Approve token spending (if needed)
 7. Confirm the transaction
 8. Track transaction status and completion
+
+## Base.dev Registration
+
+This app is registered on [base.dev](https://base.dev) with `base:app_id` metadata. Complete your project metadata (icon, tagline, screenshots, builder code) on the Base dashboard for discovery in the Base App.

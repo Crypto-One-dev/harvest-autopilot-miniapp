@@ -50,7 +50,6 @@ export async function writeAnalyticsToSheet(
     const values = [
       [
         data.action,
-        data.fid,
         data.tokenSymbol,
         data.tokenAddress,
         data.amount,
@@ -65,7 +64,7 @@ export async function writeAnalyticsToSheet(
 
     await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: `${sheetName}!A:K`,
+      range: `${sheetName}!A:J`,
       valueInputOption: "RAW",
       insertDataOption: "INSERT_ROWS",
       requestBody: {
