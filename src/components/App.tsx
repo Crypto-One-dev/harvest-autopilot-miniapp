@@ -3,6 +3,10 @@ import Head from "next/head";
 import type { JSX } from "react";
 import BigNumber from "bignumber.js";
 import { Button } from "~/components/Button";
+import AppShell from "~/components/layout/AppShell";
+import VaultList from "~/components/home/VaultList";
+import VaultDetail from "~/components/vault/VaultDetail";
+import type { VaultTab } from "~/components/vault/VaultDetail";
 import { base } from "viem/chains";
 import {
   useConnection,
@@ -17,14 +21,13 @@ import ConvertModal from "./convert/ConvertModal";
 import RevertModal from "./revert/RevertModal";
 import type { TokenInfo, VaultInfo, Token } from "~/types";
 import { usePortals } from "~/providers/Portals";
-import { formatBalance, formatTVL } from "~/utilities/parsers";
-import ChartSection from "./Charts/ChartSection";
+import { formatBalance } from "~/utilities/parsers";
 import { useVaultsData } from "~/hooks/useVaultsData";
 
 import { SUPPORTED_VAULTS, FALLBACK_TOKEN_ICON } from "~/constants";
 
 export default function App(): JSX.Element {
-  const { vaultsData } = useVaultsData();
+  const { vaultsData, loading: vaultsLoading } = useVaultsData();
   const { address, isConnected, chainId: connectedChainId } = useConnection();
   const connect = useConnect();
   const connectors = useConnectors();
@@ -46,7 +49,7 @@ export default function App(): JSX.Element {
     images: ["/images/tokens/usdc.svg"],
     rawBalance: "0",
   });
-  const [depositAmount, setDepositAmount] = useState<string>("0");
+  const [depositAmount, setDepositAmount] = useState<string>("");
   const [vaultAddress, setVaultAddress] = useState<`0x${string}` | null>(null);
   const [isConvertTokenModalOpen, setIsConvertTokenModalOpen] = useState(false);
   const [isRevertTokenModalOpen, setIsRevertTokenModalOpen] = useState(false);
@@ -59,7 +62,6 @@ export default function App(): JSX.Element {
   const isWalletConnected = isConnected;
   const chainId: number = base.id;
   const [supportedTokens, setSupportedTokens] = useState<TokenInfo[]>([]);
-  const [isBalanceLoading, setIsBalanceLoading] = useState(false);
   const [notification, setNotification] = useState<{
     message: string;
     type: "error" | "success";
@@ -69,25 +71,10 @@ export default function App(): JSX.Element {
   const [currentAction, setCurrentAction] = useState<"deposit" | "withdraw">(
     "deposit",
   );
-  const [selectedChartVault, setSelectedChartVault] =
-    useState<VaultInfo | null>(null);
-  const [chartRefreshKey, setChartRefreshKey] = useState(0);
-
-  // Add a ref for the chart section
-  const chartSectionRef = useRef<HTMLDivElement>(null);
-
-  // Scroll to chart section function
-  const scrollToCharts = () => {
-    if (chartSectionRef.current) {
-      // Add a small delay to ensure UI has updated
-      setTimeout(() => {
-        chartSectionRef.current?.scrollIntoView({
-          behavior: "smooth",
-          block: "nearest",
-        });
-      }, 100);
-    }
-  };
+  const [view, setView] = useState<"home" | "detail">("home");
+  const [detailTab, setDetailTab] = useState<VaultTab>("enter");
+  const [pendingTokenSelectOpen, setPendingTokenSelectOpen] = useState(false);
+  const balanceFetchInFlight = useRef(false);
 
   // Show notification function
   const showNotification = (
@@ -118,11 +105,7 @@ export default function App(): JSX.Element {
 
   // Switch to Base chain if needed
   useEffect(() => {
-    if (
-      isWalletConnected &&
-      connectedChainId &&
-      connectedChainId !== base.id
-    ) {
+    if (isWalletConnected && connectedChainId && connectedChainId !== base.id) {
       switchToBaseChain({ chainId: base.id });
     }
   }, [isWalletConnected, connectedChainId, switchToBaseChain]);
@@ -136,286 +119,6 @@ export default function App(): JSX.Element {
     }
   }, [isWalletConnected]);
 
-  // Fetch balances function
-  const fetchBalances = useCallback(async () => {
-    if (isBalanceLoading) {
-      return;
-    }
-
-    if (!walletAddress) {
-      const defaultTokens = SUPPORTED_VAULTS.map((token) => ({
-        ...token,
-        balance: "0",
-        balanceUSD: "0",
-        price: "0",
-      })) as TokenInfo[];
-
-      setTokenBalances(defaultTokens);
-      setVaultBalances({});
-      setSupportedTokens(defaultTokens);
-      return;
-    }
-
-    try {
-      setIsBalanceLoading(true);
-
-      // Only fetch balances, not base tokens (that's handled separately)
-      const balances = await getPortalsBalances(walletAddress, chainId);
-
-      const defaultTokens = SUPPORTED_VAULTS.map((token) => ({
-        ...token,
-        balance: "0",
-        balanceUSD: "0",
-        price: "0",
-      })) as TokenInfo[];
-
-      // Process all balances
-      const newVaultBalances: { [key: string]: TokenInfo | null } = {};
-      const tokensWithBalance: TokenInfo[] = [];
-
-      if (balances && balances.length > 0) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        balances.forEach((balance: any) => {
-          const tokenAddress = balance.address?.toLowerCase();
-          const matchingVault = SUPPORTED_VAULTS.find(
-            (vault) => vault.vaultAddress?.toLowerCase() === tokenAddress,
-          );
-
-          if (matchingVault) {
-            // This is a vault token
-            const price = new BigNumber(balance.balanceUSD)
-              .div(new BigNumber(balance.balance))
-              .toString();
-
-            newVaultBalances[matchingVault.symbol] = {
-              symbol: normalizeTokenSymbol(balance.symbol),
-              name: balance.name,
-              id: `${normalizeTokenSymbol(balance.symbol).toLowerCase()}_${chainId}`,
-              icon: balance.image || balance.images?.[0] || FALLBACK_TOKEN_ICON,
-              address: balance.address as `0x${string}`,
-              decimals: balance.decimals,
-              balance: balance.balance.toString(),
-              balanceUSD: balance.balanceUSD.toString(),
-              price: balance.price ?? price,
-              rawBalance: balance.rawBalance.toString(),
-            };
-          } else if (Number(balance.balanceUSD) > 0) {
-            // This is a regular token with positive balance
-            const price = new BigNumber(balance.balanceUSD)
-              .div(new BigNumber(balance.balance))
-              .toString();
-
-            tokensWithBalance.push({
-              symbol: normalizeTokenSymbol(balance.symbol),
-              name: balance.name,
-              id: `${normalizeTokenSymbol(balance.symbol).toLowerCase()}_${chainId}`,
-              icon: balance.image || balance.images?.[0] || FALLBACK_TOKEN_ICON,
-              address: balance.address as `0x${string}`,
-              decimals: balance.decimals,
-              balance: balance.balance.toString(),
-              balanceUSD: balance.balanceUSD.toString(),
-              price: balance.price ?? price,
-              rawBalance: balance.rawBalance.toString(),
-            });
-          }
-        });
-
-        // Set null for vaults without balances
-        SUPPORTED_VAULTS.forEach((vault) => {
-          if (!newVaultBalances[vault.symbol]) {
-            newVaultBalances[vault.symbol] = null;
-          }
-        });
-
-        setVaultBalances(newVaultBalances);
-        setTokenBalances(tokensWithBalance);
-      } else {
-        setVaultBalances({});
-        setTokenBalances(defaultTokens);
-      }
-    } catch (error) {
-      console.error("Failed to fetch balances:", error);
-
-      const defaultTokens = SUPPORTED_VAULTS.map((token) => ({
-        ...token,
-        balance: "0",
-        balanceUSD: "0",
-        price: "0",
-      })) as TokenInfo[];
-
-      setTokenBalances(defaultTokens);
-      setVaultBalances({});
-      setSupportedTokens(defaultTokens);
-    } finally {
-      setIsBalanceLoading(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [walletAddress, chainId, getPortalsBalances]);
-
-  // Fetch balances when critical dependencies change
-  useEffect(() => {
-    if (walletAddress && chainId) {
-      fetchBalances();
-    }
-  }, [walletAddress, chainId, fetchBalances]);
-
-  // Extract fetchSupportedTokens as a standalone function so it can be reused
-  const fetchSupportedTokens = useCallback(async () => {
-    if (!chainId || !walletAddress) return; // Only fetch when wallet is connected
-
-    try {
-      const tokens = await getPortalsBaseTokens(chainId);
-      if (tokens) {
-        // Get balances since address is available
-        const balances =
-          (await getPortalsBalances(walletAddress, chainId)) || [];
-
-        const tokenInfos = tokens.map((token: Token) => {
-          // Find matching balance info
-          const balanceInfo = balances.find(
-            (b) => b.address?.toLowerCase() === token.address?.toLowerCase(),
-          );
-
-          return {
-            symbol: normalizeTokenSymbol(token.symbol),
-            name: token.name,
-            id: `${normalizeTokenSymbol(token.symbol).toLowerCase()}_${chainId}`,
-            icon: token.image || token.images?.[0] || FALLBACK_TOKEN_ICON,
-            address: token.address as `0x${string}`,
-            decimals: token.decimals,
-            balance: balanceInfo ? balanceInfo.balance.toString() : "0",
-            balanceUSD: balanceInfo ? balanceInfo.balanceUSD.toString() : "0",
-            price: balanceInfo
-              ? new BigNumber(balanceInfo.balanceUSD)
-                  .div(new BigNumber(balanceInfo.balance))
-                  .toString()
-              : "0",
-            images: token.images,
-            rawBalance: balanceInfo ? balanceInfo.rawBalance.toString() : "0",
-          };
-        });
-        setSupportedTokens(tokenInfos);
-      }
-    } catch (error) {
-      console.error("Failed to fetch supported tokens:", error);
-    }
-  }, [chainId, walletAddress, getPortalsBaseTokens, getPortalsBalances]);
-
-  // Call fetchSupportedTokens directly when dependencies change
-  useEffect(() => {
-    if (chainId && walletAddress) {
-      fetchSupportedTokens();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chainId, walletAddress]); // Only run when chainId or walletAddress changes
-
-  // Update the success handlers
-  const handleConvertSuccess = async () => {
-    setIsConvertModalOpen(false);
-    setIsAmountModalOpen(false);
-    setDepositAmount("0");
-    await fetchBalances();
-    await fetchSupportedTokens();
-    setChartRefreshKey((key) => key + 1);
-
-    if (!walletAddress) return;
-
-    const updatedBalances = await getPortalsBalances(walletAddress, chainId);
-    if (updatedBalances) {
-      const currentToken = updatedBalances.find(
-        (b) =>
-          b.address &&
-          selectedToken.address &&
-          b.address.toLowerCase() === selectedToken.address.toLowerCase(),
-      );
-
-      if (!currentToken || Number(currentToken.balanceUSD) <= 0) {
-        const nextToken = updatedBalances.find(
-          (b) =>
-            b.address &&
-            Number(b.balanceUSD) > 0 &&
-            b.address.toLowerCase() !== vaultAddress?.toLowerCase(),
-        );
-
-        if (nextToken) {
-          setSelectedToken({
-            symbol: nextToken.symbol,
-            name: nextToken.name,
-            id: `${nextToken.symbol.toLowerCase()}_${chainId}`,
-            icon:
-              nextToken.image || nextToken.images?.[0] || FALLBACK_TOKEN_ICON,
-            address: nextToken.address as `0x${string}`,
-            decimals: nextToken.decimals,
-            balance: nextToken.balance.toString(),
-            balanceUSD: nextToken.balanceUSD.toString(),
-            price: new BigNumber(nextToken.balanceUSD)
-              .div(new BigNumber(nextToken.balance))
-              .toString(),
-            images: nextToken.images,
-            rawBalance: nextToken.rawBalance.toString(),
-          });
-        }
-      } else if (Number(currentToken.balanceUSD) > 0) {
-        setSelectedToken({
-          symbol: currentToken.symbol,
-          name: currentToken.name,
-          id: `${currentToken.symbol.toLowerCase()}_${chainId}`,
-          icon:
-            currentToken.image ||
-            currentToken.images?.[0] ||
-            FALLBACK_TOKEN_ICON,
-          address: currentToken.address as `0x${string}`,
-          decimals: currentToken.decimals,
-          balance: currentToken.balance.toString(),
-          balanceUSD: currentToken.balanceUSD.toString(),
-          price: new BigNumber(currentToken.balanceUSD)
-            .div(new BigNumber(currentToken.balance))
-            .toString(),
-          images: currentToken.images,
-          rawBalance: currentToken.rawBalance.toString(),
-        });
-      }
-    }
-  };
-
-  const handleRevertSuccess = async () => {
-    setIsRevertModalOpen(false);
-    setIsAmountModalOpen(false);
-    setDepositAmount("0");
-    setVaultBalances({});
-    await fetchBalances();
-    await fetchSupportedTokens(); // Add this line to fetch supported tokens after revert
-    setChartRefreshKey((key) => key + 1);
-
-    if (!walletAddress) return;
-
-    const updatedBalances = await getPortalsBalances(walletAddress, chainId);
-    if (updatedBalances) {
-      const currentVaultToken = updatedBalances.find(
-        (b) =>
-          b.address &&
-          vaultAddress &&
-          b.address.toLowerCase() === vaultAddress.toLowerCase(),
-      );
-
-      if (!currentVaultToken || Number(currentVaultToken.balanceUSD) <= 0) {
-        setSelectedToken({
-          symbol: "USDC",
-          name: "USD Coin",
-          id: "IPOR_USDC_base",
-          icon: "/images/tokens/usdc.svg",
-          address: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-          decimals: 6,
-          balance: "0",
-          balanceUSD: "0",
-          price: "0",
-          images: ["/images/tokens/usdc.svg"],
-          rawBalance: "0",
-        });
-      }
-    }
-  };
-
   // Add token symbol normalization
   const normalizeTokenSymbol = (symbol: string) => {
     const symbolMap: { [key: string]: string } = {
@@ -424,80 +127,453 @@ export default function App(): JSX.Element {
     return symbolMap[symbol] || symbol;
   };
 
-  // Handle deposit from vault card
-  const handleDepositClick = (vault: VaultInfo) => {
-    setSelectedVault(vault.symbol);
-    setVaultAddress(vault.vaultAddress);
-    setActiveVault(vault);
-    setCurrentAction("deposit");
-    setSelectedChartVault(vault); // Show charts for this vault
-    scrollToCharts(); // Scroll to the charts
+  const mapPortalsBalanceToTokenInfo = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (balance: any): TokenInfo => {
+      const normalizedBalance = new BigNumber(balance.balance || "0");
+      const price =
+        balance.price ??
+        (normalizedBalance.gt(0)
+          ? new BigNumber(balance.balanceUSD || "0")
+              .div(normalizedBalance)
+              .toString()
+          : "0");
 
-    // Find a matching token for deposit
-    const token = tokenBalances.find((t) => t.symbol === vault.symbol);
+      return {
+        symbol: normalizeTokenSymbol(balance.symbol),
+        name: balance.name,
+        id: `${normalizeTokenSymbol(balance.symbol).toLowerCase()}_${chainId}`,
+        icon: balance.image || balance.images?.[0] || FALLBACK_TOKEN_ICON,
+        address: balance.address as `0x${string}`,
+        decimals: balance.decimals,
+        balance: balance.balance.toString(),
+        balanceUSD: balance.balanceUSD?.toString() ?? "0",
+        price,
+        images: balance.images,
+        rawBalance: balance.rawBalance?.toString() ?? "0",
+      };
+    },
+    [chainId],
+  );
 
-    if (token) {
-      setSelectedToken(token);
-      // Open token select modal first
+  // Fetch balances function
+  const fetchBalances = useCallback(
+    async (force = false) => {
+      if (balanceFetchInFlight.current && !force) {
+        return null;
+      }
+
+      if (!walletAddress) {
+        const defaultTokens = SUPPORTED_VAULTS.map((token) => ({
+          ...token,
+          balance: "0",
+          balanceUSD: "0",
+          price: "0",
+        })) as TokenInfo[];
+
+        setTokenBalances(defaultTokens);
+        setVaultBalances({});
+        setSupportedTokens(defaultTokens);
+        return null;
+      }
+
+      balanceFetchInFlight.current = true;
+
+      try {
+        const balances = await getPortalsBalances(walletAddress, chainId);
+
+        const defaultTokens = SUPPORTED_VAULTS.map((token) => ({
+          ...token,
+          balance: "0",
+          balanceUSD: "0",
+          price: "0",
+        })) as TokenInfo[];
+
+        const newVaultBalances: { [key: string]: TokenInfo | null } = {};
+        const tokensWithBalance: TokenInfo[] = [];
+
+        if (balances && balances.length > 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          balances.forEach((balance: any) => {
+            const tokenAddress = balance.address?.toLowerCase();
+            const matchingVault = SUPPORTED_VAULTS.find(
+              (vault) => vault.vaultAddress?.toLowerCase() === tokenAddress,
+            );
+            const tokenInfo = mapPortalsBalanceToTokenInfo(balance);
+
+            if (matchingVault) {
+              newVaultBalances[matchingVault.symbol] = tokenInfo;
+            } else if (Number(balance.balance) > 0) {
+              tokensWithBalance.push(tokenInfo);
+            }
+          });
+
+          SUPPORTED_VAULTS.forEach((vault) => {
+            if (!newVaultBalances[vault.symbol]) {
+              newVaultBalances[vault.symbol] = null;
+            }
+          });
+
+          setVaultBalances(newVaultBalances);
+          setTokenBalances(tokensWithBalance);
+        } else {
+          setVaultBalances({});
+          setTokenBalances(defaultTokens);
+        }
+
+        const tokens = await getPortalsBaseTokens(chainId);
+        if (tokens) {
+          const balanceList = balances ?? [];
+          const tokenInfos = tokens.map((token: Token) => {
+            const balanceInfo = balanceList.find(
+              (b) => b.address?.toLowerCase() === token.address?.toLowerCase(),
+            );
+
+            return {
+              symbol: normalizeTokenSymbol(token.symbol),
+              name: token.name,
+              id: `${normalizeTokenSymbol(token.symbol).toLowerCase()}_${chainId}`,
+              icon: token.image || token.images?.[0] || FALLBACK_TOKEN_ICON,
+              address: token.address as `0x${string}`,
+              decimals: token.decimals,
+              balance: balanceInfo ? balanceInfo.balance.toString() : "0",
+              balanceUSD: balanceInfo ? balanceInfo.balanceUSD.toString() : "0",
+              price: balanceInfo
+                ? new BigNumber(balanceInfo.balanceUSD)
+                    .div(new BigNumber(balanceInfo.balance || "1"))
+                    .toString()
+                : "0",
+              images: token.images,
+              rawBalance: balanceInfo ? balanceInfo.rawBalance.toString() : "0",
+            };
+          });
+          setSupportedTokens(tokenInfos);
+        }
+
+        return balances;
+      } catch (error) {
+        console.error("Failed to fetch balances:", error);
+
+        const defaultTokens = SUPPORTED_VAULTS.map((token) => ({
+          ...token,
+          balance: "0",
+          balanceUSD: "0",
+          price: "0",
+        })) as TokenInfo[];
+
+        setTokenBalances(defaultTokens);
+        setVaultBalances({});
+        setSupportedTokens(defaultTokens);
+        return null;
+      } finally {
+        balanceFetchInFlight.current = false;
+      }
+    },
+    [
+      walletAddress,
+      chainId,
+      getPortalsBalances,
+      getPortalsBaseTokens,
+      mapPortalsBalanceToTokenInfo,
+    ],
+  );
+
+  const refreshBalancesWithRetry = useCallback(async () => {
+    const first = await fetchBalances(true);
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    const second = await fetchBalances(true);
+    return second ?? first;
+  }, [fetchBalances]);
+
+  useEffect(() => {
+    if (!isWalletConnected || !pendingTokenSelectOpen) return;
+
+    if (currentAction === "deposit") {
       setIsConvertTokenModalOpen(true);
     } else {
-      // If no matching token found, use a default one
-      setSelectedToken({
-        symbol: vault.symbol,
-        name: vault.name,
-        id: vault.id,
-        icon: vault.icon,
-        address: vault.address,
-        decimals: vault.decimals,
-        balance: "0",
-        balanceUSD: "0",
-        price: "0",
-        images: vault.images || [vault.icon],
-        rawBalance: "0",
-      });
-      setIsConvertTokenModalOpen(true);
+      setIsRevertTokenModalOpen(true);
+    }
+    setPendingTokenSelectOpen(false);
+  }, [isWalletConnected, pendingTokenSelectOpen, currentAction]);
+
+  // Fetch balances when wallet connects or chain changes
+  useEffect(() => {
+    if (walletAddress && chainId) {
+      void fetchBalances();
+    }
+  }, [walletAddress, chainId, fetchBalances]);
+
+  // Update the success handlers
+  const handleConvertSuccess = async () => {
+    setIsConvertModalOpen(false);
+    setIsAmountModalOpen(false);
+    setDepositAmount("");
+    const updatedBalances = await refreshBalancesWithRetry();
+
+    if (!updatedBalances || !selectedToken.address) return;
+
+    const currentToken = updatedBalances.find(
+      (b) =>
+        b.address &&
+        b.address.toLowerCase() === selectedToken.address!.toLowerCase(),
+    );
+
+    if (currentToken && Number(currentToken.balance) > 0) {
+      setSelectedToken(mapPortalsBalanceToTokenInfo(currentToken));
+      return;
+    }
+
+    const nextToken = updatedBalances.find(
+      (b) =>
+        b.address &&
+        Number(b.balance) > 0 &&
+        b.address.toLowerCase() !== vaultAddress?.toLowerCase(),
+    );
+
+    if (nextToken) {
+      setSelectedToken(mapPortalsBalanceToTokenInfo(nextToken));
     }
   };
 
-  // Handle withdraw from vault card
-  const handleWithdrawClick = (vault: VaultInfo) => {
+  const handleRevertSuccess = async () => {
+    setIsRevertModalOpen(false);
+    setIsAmountModalOpen(false);
+    setDepositAmount("");
+    const updatedBalances = await refreshBalancesWithRetry();
+
+    if (!updatedBalances || !selectedToken.address) return;
+
+    const receiveToken = updatedBalances.find(
+      (b) =>
+        b.address &&
+        b.address.toLowerCase() === selectedToken.address!.toLowerCase(),
+    );
+
+    if (receiveToken) {
+      setSelectedToken(mapPortalsBalanceToTokenInfo(receiveToken));
+    }
+  };
+
+  useEffect(() => {
+    if (!isWalletConnected || !selectedToken.address) return;
+
+    const tokenAddress = selectedToken.address.toLowerCase();
+    const fresh =
+      tokenBalances.find((t) => t.address?.toLowerCase() === tokenAddress) ??
+      supportedTokens.find((t) => t.address?.toLowerCase() === tokenAddress);
+
+    if (!fresh) return;
+
+    setSelectedToken((prev) => {
+      if (
+        prev.balance === fresh.balance &&
+        prev.rawBalance === fresh.rawBalance
+      ) {
+        return prev;
+      }
+      return fresh;
+    });
+  }, [
+    tokenBalances,
+    supportedTokens,
+    isWalletConnected,
+    selectedToken.address,
+  ]);
+
+  const getDepositTokenOptions = (vault: VaultInfo): TokenInfo[] => {
+    const defaultToken = getDefaultTokenForVault(vault);
+
+    if (!isWalletConnected) {
+      return [defaultToken];
+    }
+
+    const withBalance = [
+      ...tokenBalances.filter((t) => Number(t.balance) > 0),
+      ...Object.entries(vaultBalances)
+        .filter(
+          ([symbol, vaultToken]) =>
+            symbol !== vault.symbol &&
+            vaultToken !== null &&
+            Number(vaultToken.balance) > 0,
+        )
+        .map(([_, vaultToken]) => vaultToken as TokenInfo),
+    ];
+
+    const seen = new Set<string>();
+    const unique = withBalance.filter((token) => {
+      const key = token.address?.toLowerCase() ?? token.symbol;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    if (unique.length === 0) {
+      return [defaultToken];
+    }
+
+    const hasDefault = unique.some(
+      (token) =>
+        token.address?.toLowerCase() === defaultToken.address?.toLowerCase(),
+    );
+
+    const sorted = unique.sort(
+      (a, b) => Number(b.balanceUSD) - Number(a.balanceUSD),
+    );
+
+    return hasDefault ? sorted : [defaultToken, ...sorted];
+  };
+
+  const getWithdrawTokenOptions = (vault: VaultInfo): TokenInfo[] => {
+    const defaultToken =
+      supportedTokens.find((t) => t.symbol === vault.symbol) ??
+      getDefaultTokenForVault(vault);
+
+    if (!isWalletConnected) {
+      return [defaultToken];
+    }
+
+    const supportedAddresses = Object.values(
+      SUPPORTED_TOKEN_LIST[chainId as keyof typeof SUPPORTED_TOKEN_LIST] || {},
+    ).map((addr) => addr.toLowerCase());
+
+    const options = [
+      ...supportedTokens.filter((token) => {
+        if (!token.address) return false;
+        const isBaseToken =
+          token.address.toLowerCase() === vault.address.toLowerCase();
+        const isInSupportedList = supportedAddresses.includes(
+          token.address.toLowerCase(),
+        );
+        return isBaseToken || isInSupportedList;
+      }),
+      ...Object.entries(vaultBalances)
+        .filter(
+          ([symbol, vaultToken]) =>
+            symbol !== vault.symbol &&
+            vaultToken !== null &&
+            Number(vaultToken.balance) > 0,
+        )
+        .map(([_, vaultToken]) => vaultToken as TokenInfo),
+    ];
+
+    const seen = new Set<string>();
+    const unique = options.filter((token) => {
+      const key = token.address?.toLowerCase() ?? token.symbol;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    if (unique.length === 0) {
+      return [defaultToken];
+    }
+
+    return unique.sort((a, b) => Number(b.balanceUSD) - Number(a.balanceUSD));
+  };
+
+  const getDefaultTokenForVault = (vault: VaultInfo): TokenInfo => ({
+    symbol: vault.symbol === "WETH" ? "ETH" : vault.symbol,
+    name: vault.symbol === "WETH" ? "Ethereum" : vault.name,
+    id: vault.id,
+    icon: vault.icon,
+    address: vault.address,
+    decimals: vault.decimals,
+    balance: "0",
+    balanceUSD: "0",
+    price: "0",
+    images: vault.images || [vault.icon],
+    rawBalance: "0",
+  });
+
+  const resolveWalletToken = (vault: VaultInfo): TokenInfo => {
+    const matchBySymbol = (token: TokenInfo) =>
+      token.symbol === vault.symbol ||
+      (vault.symbol === "WETH" &&
+        (token.symbol === "ETH" || token.symbol === "WETH"));
+
+    return (
+      tokenBalances.find(matchBySymbol) ??
+      supportedTokens.find(matchBySymbol) ??
+      getDefaultTokenForVault(vault)
+    );
+  };
+
+  const openVaultDetail = (vault: VaultInfo, tab: VaultTab = "enter") => {
     setSelectedVault(vault.symbol);
     setVaultAddress(vault.vaultAddress);
     setActiveVault(vault);
-    setCurrentAction("withdraw");
-    setSelectedChartVault(vault); // Show charts for this vault
-    scrollToCharts(); // Scroll to the charts
+    setDetailTab(tab);
+    setDepositAmount("");
+    setCurrentAction(tab === "exit" ? "withdraw" : "deposit");
 
-    // Use a default token for withdrawal
-    const defaultToken = supportedTokens.find(
-      (t) => t.symbol === vault.symbol,
-    ) || {
-      symbol: vault.symbol,
-      name: vault.name,
-      id: vault.id,
-      icon: vault.icon,
-      address: vault.address,
-      decimals: vault.decimals,
-      balance: "0",
-      balanceUSD: "0",
-      price: "0",
-      images: vault.images || [vault.icon],
-      rawBalance: "0",
-    };
-
-    setSelectedToken(defaultToken);
-
-    // Check if there's a balance for withdrawal
-    const vaultBalance = getVaultBalance(vault.symbol);
-    if (vaultBalance && parseFloat(vaultBalance.balance) > 0) {
-      setDepositAmount("0"); // Reset amount before opening modal
-      // Open token selection modal first
-      setIsRevertTokenModalOpen(true);
+    if (tab === "exit") {
+      const defaultToken =
+        supportedTokens.find((t) => t.symbol === vault.symbol) ??
+        getDefaultTokenForVault(vault);
+      setSelectedToken(defaultToken);
     } else {
-      showNotification(
-        `You don't have any ${vault.vaultSymbol} to withdraw`,
-        "error",
-      );
+      setSelectedToken(resolveWalletToken(vault));
+    }
+    setView("detail");
+  };
+
+  // Handle deposit from vault card
+  const handleDepositClick = (vault: VaultInfo) => {
+    openVaultDetail(vault, "enter");
+  };
+
+  const handleDetailTabChange = (tab: VaultTab) => {
+    setDetailTab(tab);
+    setDepositAmount("");
+
+    if (tab === "enter") {
+      setCurrentAction("deposit");
+      if (activeVault) {
+        setSelectedToken(resolveWalletToken(activeVault));
+      }
+      return;
+    }
+
+    if (tab === "exit") {
+      setCurrentAction("withdraw");
+      if (activeVault) {
+        const defaultToken =
+          supportedTokens.find((t) => t.symbol === activeVault.symbol) ??
+          getDefaultTokenForVault(activeVault);
+        setSelectedToken(defaultToken);
+      }
+    }
+  };
+
+  const handleTokenSelect = () => {
+    if (!isWalletConnected) {
+      setPendingTokenSelectOpen(true);
+      handleConnectWallet();
+      return;
+    }
+
+    if (currentAction === "deposit") {
+      setIsConvertTokenModalOpen(true);
+    } else {
+      setIsRevertTokenModalOpen(true);
+    }
+  };
+
+  const handleMaxAmount = () => {
+    if (currentAction === "deposit" && selectedToken) {
+      const balance = new BigNumber(selectedToken.rawBalance || "0")
+        .div(new BigNumber(10).pow(selectedToken.decimals))
+        .toString();
+      setDepositAmount(balance);
+      return;
+    }
+
+    const vaultBalance = getVaultBalance(selectedVault);
+    if (vaultBalance) {
+      const balance = new BigNumber(vaultBalance.rawBalance || "0")
+        .div(new BigNumber(10).pow(vaultBalance.decimals))
+        .toString();
+      setDepositAmount(balance);
     }
   };
 
@@ -556,40 +632,59 @@ export default function App(): JSX.Element {
     }
   };
 
-  // Add handler for vault detail click
-  const handleVaultDetailClick = (vault: VaultInfo) => {
-    setSelectedChartVault(vault);
-  };
-
-  // Add this function to show vault details when a user has a balance
-  const showVaultDetailsIfBalance = (vault: VaultInfo) => {
-    const vaultBalance = getVaultBalance(vault.symbol);
-    if (vaultBalance && parseFloat(vaultBalance.balance) > 0) {
-      setSelectedChartVault(vault);
-      return true;
+  const handleHoldingsSubmit = () => {
+    if (!isWalletConnected) {
+      handleConnectWallet();
+      return;
     }
-    return false;
-  };
 
-  // Update the useEffect that runs when wallet is connected to check for balances
-  useEffect(() => {
-    if (isWalletConnected && walletAddress) {
-      // Find the first vault with a balance to show its details
-      if (
-        Object.values(vaultBalances).some(
-          (balance) => balance && parseFloat(balance.balance) > 0,
-        )
-      ) {
-        // Find the first vault with a balance
-        for (const vault of SUPPORTED_VAULTS) {
-          if (showVaultDetailsIfBalance(vault)) {
-            break; // Show only the first vault with a balance
-          }
+    if (!depositAmount || parseFloat(depositAmount) <= 0) {
+      showNotification("Please enter a valid amount", "error");
+      return;
+    }
+
+    if (currentAction === "deposit") {
+      if (selectedToken) {
+        const availableBalance = new BigNumber(selectedToken.rawBalance).div(
+          new BigNumber(10).pow(selectedToken.decimals),
+        );
+
+        if (new BigNumber(depositAmount).gt(availableBalance)) {
+          showNotification(
+            `Insufficient ${selectedToken.symbol} balance. Available: ${formatBalance(selectedToken.balance)}`,
+            "error",
+          );
+          return;
         }
       }
+
+      setIsConvertModalOpen(true);
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isWalletConnected, walletAddress, vaultBalances]);
+
+    const vaultBalance = getVaultBalance(selectedVault);
+    if (vaultBalance) {
+      const availableBalance = new BigNumber(vaultBalance.rawBalance).div(
+        new BigNumber(10).pow(vaultBalance.decimals),
+      );
+
+      if (new BigNumber(depositAmount).gt(availableBalance)) {
+        const vaultSymbol =
+          SUPPORTED_VAULTS.find((v) => v.symbol === selectedVault)
+            ?.vaultSymbol || "";
+        showNotification(
+          `Insufficient ${vaultSymbol} balance. Available: ${formatBalance(vaultBalance.balance)}`,
+          "error",
+        );
+        return;
+      }
+    } else {
+      showNotification("You don't have a vault balance to withdraw", "error");
+      return;
+    }
+
+    setIsRevertModalOpen(true);
+  };
 
   const handleConnectWallet = () => {
     const connector: Connector | undefined =
@@ -601,25 +696,6 @@ export default function App(): JSX.Element {
     }
   };
 
-  // Not connected state with custom UI
-  if (!isWalletConnected) {
-    return (
-      <div className="w-[300px] mx-auto pt-16 px-2">
-        <h1 className="text-2xl font-bold text-center mb-4">
-          Harvest on Autopilot 🌾
-        </h1>
-        <div className="flex flex-col items-center gap-4">
-          <p className="text-center text-gray-600 dark:text-gray-400">
-            Please connect your wallet to view your positions
-          </p>
-          <Button onClick={handleConnectWallet} disabled={connect.isPending}>
-            {connect.isPending ? "Connecting..." : "Connect Wallet"}
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <>
       <Head>
@@ -628,281 +704,84 @@ export default function App(): JSX.Element {
           content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
         />
       </Head>
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-        <div className="max-w-lg mx-auto px-2 py-3">
-          <h1 className="text-xl font-bold text-center mb-4">
-            Harvest on Autopilot 🌾
-          </h1>
-
-          {/* Notification */}
-          {notification && (
-            <div
-              className={`mb-4 p-3 rounded-lg border ${
-                notification.type === "error"
-                  ? "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-600 dark:text-red-400"
-                  : "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-600 dark:text-green-400"
-              }`}
+      <AppShell onBrandClick={() => setView("home")}>
+        {notification && (
+          <div
+            className={`harvest-toast ${
+              notification.type === "error" ? "is-error" : "is-success"
+            }`}
+          >
+            <p style={{ margin: 0, fontSize: 13 }}>{notification.message}</p>
+            <button
+              type="button"
+              onClick={() => setNotification(null)}
+              className="harvest-modal-close"
             >
-              <div className="flex justify-between items-center">
-                <p className="text-sm">{notification.message}</p>
-                <button
-                  onClick={() => setNotification(null)}
-                  className="text-current hover:opacity-70 ml-2"
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Main Content */}
-          <div className="space-y-4">
-            {/* Your Balance Section - Only visible when user has balances */}
-            {isWalletConnected &&
-              Object.values(vaultBalances).some(
-                (balance) => balance && parseFloat(balance.balance) > 0,
-              ) && (
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm overflow-hidden mb-4">
-                  <div className="p-4 border-b border-gray-100 dark:border-gray-700">
-                    <h2 className="text-md font-semibold">Your Positions</h2>
-                  </div>
-                  <div className="grid grid-cols-1 divide-y divide-gray-100 dark:divide-gray-700">
-                    {Object.entries(vaultBalances)
-                      .filter(
-                        ([_, balance]) =>
-                          balance && parseFloat(balance.balance) > 0,
-                      )
-                      .map(([symbol, balance]) => {
-                        const vault = SUPPORTED_VAULTS.find(
-                          (v) => v.symbol === symbol,
-                        );
-                        if (!vault || !balance) return null;
-
-                        return (
-                          <div key={symbol} className="p-4">
-                            <div className="flex items-center justify-between">
-                              {/* Vault Info - Clickable for Charts */}
-                              <button
-                                className="flex items-center gap-3 hover:opacity-80 transition-opacity text-left"
-                                onClick={() => handleVaultDetailClick(vault)}
-                              >
-                                <img
-                                  src={vault.icon}
-                                  alt={vault.symbol}
-                                  className="w-10 h-10"
-                                />
-                                <div>
-                                  <div className="font-medium">
-                                    {vault.vaultSymbol}
-                                  </div>
-                                  <div className="text-xs text-gray-500 dark:text-gray-400">
-                                    {formatBalance(balance.balance)} ($
-                                    {formatBalance(balance.balanceUSD)})
-                                  </div>
-                                </div>
-                              </button>
-
-                              {/* Action Buttons */}
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => handleWithdrawClick(vault)}
-                                  className="px-3 py-1.5 text-xs bg-purple-600 hover:bg-purple-700 text-white rounded-md transition-colors"
-                                >
-                                  Withdraw
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                  </div>
-                </div>
-              )}
-
-            {/* Deposit Section */}
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm overflow-hidden mb-4">
-              <div className="p-4 border-b border-gray-100 dark:border-gray-700">
-                <h2 className="text-md font-semibold">Deposit & Earn</h2>
-              </div>
-
-              <div className="grid grid-cols-1 divide-y divide-gray-100 dark:divide-gray-700">
-                {SUPPORTED_VAULTS.map((vault) => {
-                  const vaultData = vaultsData?.[vault.id];
-
-                  return (
-                    <div key={vault.symbol} className="p-4">
-                      <div className="flex items-center justify-between">
-                        {/* Vault Info - Clickable for Charts */}
-                        <button
-                          className="flex items-center gap-3 hover:opacity-80 transition-opacity text-left"
-                          onClick={() => handleVaultDetailClick(vault)}
-                        >
-                          <img
-                            src={vault.icon}
-                            alt={vault.symbol}
-                            className="w-10 h-10"
-                          />
-                          <div>
-                            <div className="font-medium">{vault.symbol}</div>
-                            <div className="text-xs text-gray-500 dark:text-gray-400">
-                              {vaultData
-                                ? `${parseFloat(vaultData.estimatedApy).toFixed(2)}% APY`
-                                : "Loading..."}
-                              {vaultData
-                                ? ` • ${formatTVL(vaultData.totalValueLocked)} TVL`
-                                : ""}
-                            </div>
-                          </div>
-                        </button>
-
-                        {/* Action Buttons */}
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => handleDepositClick(vault)}
-                            className="px-3 py-1.5 text-xs bg-purple-600 hover:bg-purple-700 text-white rounded-md transition-colors"
-                          >
-                            Deposit
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Chart Section - shown below the Deposit & Earn section */}
-            {selectedChartVault && (
-              <div
-                ref={chartSectionRef}
-                className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm"
-              >
-                <div className="flex items-center gap-3 mb-4">
-                  <img
-                    src={selectedChartVault.icon}
-                    alt={selectedChartVault.symbol}
-                    className="w-8 h-8"
-                  />
-                  <h2 className="text-lg font-semibold">
-                    {selectedChartVault.symbol} Vault Analytics
-                  </h2>
-                </div>
-
-                {/* Vault Summary */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
-                  <div className="bg-gray-50 dark:bg-gray-700 p-3 rounded-lg">
-                    <div className="text-xs text-gray-500 dark:text-gray-400">
-                      APY
-                    </div>
-                    <div className="text-lg font-medium text-green-600">
-                      {vaultsData?.[selectedChartVault.id]
-                        ? `${parseFloat(vaultsData[selectedChartVault.id].estimatedApy).toFixed(2)}%`
-                        : "Loading..."}
-                    </div>
-                  </div>
-                  <div className="bg-gray-50 dark:bg-gray-700 p-3 rounded-lg">
-                    <div className="text-xs text-gray-500 dark:text-gray-400">
-                      TVL
-                    </div>
-                    <div className="text-lg font-medium">
-                      {vaultsData?.[selectedChartVault.id]
-                        ? formatTVL(
-                            vaultsData[selectedChartVault.id].totalValueLocked,
-                          )
-                        : "Loading..."}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Charts */}
-                <ChartSection
-                  vaultAddress={selectedChartVault.vaultAddress}
-                  walletAddress={walletAddress}
-                  vaultSymbol={selectedChartVault.vaultSymbol}
-                  isWalletConnected={isWalletConnected}
-                  chainId={chainId}
-                  refreshKey={chartRefreshKey}
-                />
-              </div>
-            )}
+              ✕
+            </button>
           </div>
-        </div>
-      </div>
+        )}
+
+        {view === "home" ? (
+          <VaultList
+            vaultsData={vaultsData}
+            vaultsLoading={vaultsLoading}
+            onSelectVault={handleDepositClick}
+          />
+        ) : (
+          activeVault && (
+            <VaultDetail
+              vault={activeVault}
+              vaultsData={vaultsData}
+              vaultsLoading={vaultsLoading}
+              activeTab={detailTab}
+              onTabChange={handleDetailTabChange}
+              onBack={() => setView("home")}
+              selectedToken={selectedToken}
+              depositAmount={depositAmount}
+              vaultBalance={getVaultBalance(activeVault.symbol)}
+              walletAddress={walletAddress}
+              isConnected={isWalletConnected}
+              isConnecting={connect.isPending}
+              onTokenSelect={handleTokenSelect}
+              onAmountChange={setDepositAmount}
+              onMaxAmount={handleMaxAmount}
+              onSubmit={handleHoldingsSubmit}
+            />
+          )
+        )}
+      </AppShell>
 
       {/* Token Selection Modals */}
-      {isConvertTokenModalOpen && (
-        <ConvertTokenSelectModal
-          isOpen={isConvertTokenModalOpen}
-          onClose={() => setIsConvertTokenModalOpen(false)}
-          onSelect={(token: TokenInfo) => {
-            setSelectedToken(token);
-            setIsConvertTokenModalOpen(false);
-            // Open amount input modal after token selection
-            setDepositAmount("0"); // Reset amount for new token
-            setIsAmountModalOpen(true);
-          }}
-          selectedToken={tokenBalances.find(
-            (t) => t.symbol === selectedToken.symbol,
-          )}
-          tokens={[
-            ...tokenBalances,
-            // Add vault tokens to the list
-            ...Object.entries(vaultBalances)
-              .filter(
-                ([symbol, vaultToken]) =>
-                  symbol !== selectedVault &&
-                  vaultToken !== null &&
-                  Number(vaultToken.balance) > 0,
-              )
-              .map(([_, vaultToken]) => vaultToken as TokenInfo),
-          ].sort((a, b) => Number(b.balanceUSD) - Number(a.balanceUSD))}
-        />
-      )}
+      {isConvertTokenModalOpen &&
+        activeVault &&
+        currentAction === "deposit" && (
+          <ConvertTokenSelectModal
+            isOpen={isConvertTokenModalOpen}
+            onClose={() => setIsConvertTokenModalOpen(false)}
+            onSelect={(token: TokenInfo) => {
+              setSelectedToken(token);
+              setIsConvertTokenModalOpen(false);
+            }}
+            selectedToken={selectedToken}
+            tokens={getDepositTokenOptions(activeVault)}
+          />
+        )}
 
-      {isRevertTokenModalOpen && (
-        <RevertTokenSelectModal
-          isOpen={isRevertTokenModalOpen}
-          onClose={() => setIsRevertTokenModalOpen(false)}
-          onSelect={(token: TokenInfo) => {
-            setSelectedToken(token);
-            setIsRevertTokenModalOpen(false);
-            // Open amount input modal after token selection
-            setDepositAmount("0"); // Reset amount for new token
-            setIsAmountModalOpen(true);
-          }}
-          selectedToken={selectedToken}
-          tokens={[
-            ...supportedTokens.filter((token) => {
-              if (!token.address || !vaultAddress) return false;
-              const currentVault = SUPPORTED_VAULTS.find(
-                (v) => v.symbol === selectedVault,
-              );
-              if (!currentVault) return false;
-              const supportedAddresses = Object.values(
-                SUPPORTED_TOKEN_LIST[
-                  chainId as keyof typeof SUPPORTED_TOKEN_LIST
-                ] || {},
-              ).map((addr) => addr.toLowerCase());
-              const isBaseToken =
-                token.address.toLowerCase() ===
-                currentVault.address.toLowerCase();
-              const isInSupportedList = supportedAddresses.includes(
-                token.address.toLowerCase(),
-              );
-              return isBaseToken || isInSupportedList;
-            }),
-            // Add vault tokens to the list
-            ...Object.entries(vaultBalances)
-              .filter(
-                ([symbol, vaultToken]) =>
-                  symbol !== selectedVault &&
-                  vaultToken !== null &&
-                  Number(vaultToken.balance) > 0,
-              )
-              .map(([_, vaultToken]) => vaultToken as TokenInfo),
-          ].sort((a, b) => Number(b.balanceUSD) - Number(a.balanceUSD))}
-        />
-      )}
+      {isRevertTokenModalOpen &&
+        activeVault &&
+        currentAction === "withdraw" && (
+          <RevertTokenSelectModal
+            isOpen={isRevertTokenModalOpen}
+            onClose={() => setIsRevertTokenModalOpen(false)}
+            onSelect={(token: TokenInfo) => {
+              setSelectedToken(token);
+              setIsRevertTokenModalOpen(false);
+            }}
+            selectedToken={selectedToken}
+            tokens={getWithdrawTokenOptions(activeVault)}
+          />
+        )}
 
       {isConvertModalOpen && (
         <ConvertModal
@@ -1001,7 +880,7 @@ export default function App(): JSX.Element {
                     const value = e.target.value
                       .replace(/[^0-9.]/g, "")
                       .replace(/(\..*)\./g, "$1");
-                    if (!isNaN(Number(value))) {
+                    if (value === "" || /^\d*\.?\d*$/.test(value)) {
                       setDepositAmount(value);
                     }
                   }}

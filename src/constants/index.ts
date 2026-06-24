@@ -53,3 +53,23 @@ export const SUPPORTED_VAULTS: VaultInfo[] = [
 
 export const FALLBACK_TOKEN_ICON =
   "https://etherscan.io/images/main/empty-token.png";
+
+export const VAULT_DISPLAY_ORDER = ["WETH", "USDC", "cbBTC"] as const;
+
+export const VAULT_DISPLAY: Record<
+  string,
+  { title: string; subtitle: string }
+> = {
+  WETH: {
+    title: "WETH Autopilot",
+    subtitle: "Auto-compounding WETH yield on Base.",
+  },
+  USDC: {
+    title: "USDC Autopilot",
+    subtitle: "Auto-compounding USDC yield on Base.",
+  },
+  cbBTC: {
+    title: "cbBTC Autopilot",
+    subtitle: "Auto-compounding cbBTC yield on Base.",
+  },
+};

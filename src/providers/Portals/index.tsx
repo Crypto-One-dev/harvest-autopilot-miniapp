@@ -2,7 +2,6 @@ import React, { createContext, useContext } from "react";
 import axios from "axios";
 import { getChainNamePortals } from "~/utilities/parsers";
 import { PORTALS_FI_API_URL } from "~/constants";
-
 interface PortalsContextType {
   SUPPORTED_TOKEN_LIST: Record<number, Record<string, string>>;
   /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -14,6 +13,7 @@ interface PortalsContextType {
     chainId: number,
     fromAddress: string,
     tokenAddress: string,
+    inputAmount?: string,
   ) => Promise<any>;
   portalsApprove: (
     chainId: number,
@@ -82,21 +82,12 @@ export function PortalsProvider({ children }: PortalsProviderProps) {
     const network = getChainNamePortals(chainId);
 
     try {
-      const response = await axios({
-        method: "get",
-        url: `${PORTALS_FI_API_URL}/v2/account`,
+      const response = await axios.get("/api/portals/account", {
         params: {
           owner: address,
           networks: network,
         },
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        withCredentials: false,
         timeout: 10000,
-        validateStatus: (status) => status >= 200 && status < 300,
       });
 
       if (!response.data || !response.data.balances) {
@@ -107,19 +98,6 @@ export function PortalsProvider({ children }: PortalsProviderProps) {
       return response.data.balances;
     } catch (error) {
       console.error("Error fetching balances:", error);
-      if (axios.isAxiosError(error)) {
-        console.error("Axios error details:", {
-          message: error.message,
-          response: error.response?.data,
-          status: error.response?.status,
-          headers: error.response?.headers,
-          config: {
-            url: error.config?.url,
-            method: error.config?.method,
-            headers: error.config?.headers,
-          },
-        });
-      }
       return [];
     }
   };
@@ -195,18 +173,15 @@ export function PortalsProvider({ children }: PortalsProviderProps) {
     chainId: number,
     fromAddress: string,
     tokenAddress: string,
+    inputAmount: string = "0",
   ) => {
     try {
       const inputToken = `${getChainNamePortals(chainId)}:${tokenAddress}`;
-      const response = await axios.get(`${PORTALS_FI_API_URL}/v2/approval`, {
-        params: { sender: fromAddress, inputToken, inputAmount: 0 },
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
+      const response = await axios.get("/api/portals/approval", {
+        params: { sender: fromAddress, inputToken, inputAmount },
+        timeout: 10000,
       });
-      return response.data.context;
+      return response.data?.context ?? null;
     } catch (error) {
       console.error("Error fetching approvals:", error);
       if (axios.isAxiosError(error)) {
@@ -216,7 +191,7 @@ export function PortalsProvider({ children }: PortalsProviderProps) {
           status: error.response?.status,
         });
       }
-      return {};
+      return null;
     }
   };
 
@@ -228,13 +203,9 @@ export function PortalsProvider({ children }: PortalsProviderProps) {
   ) => {
     try {
       const inputToken = `${getChainNamePortals(chainId)}:${tokenAddress}`;
-      const response = await axios.get(`${PORTALS_FI_API_URL}/v2/approval`, {
+      const response = await axios.get("/api/portals/approval", {
         params: { sender: fromAddress, inputToken, inputAmount },
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
+        timeout: 10000,
       });
       return response.data;
     } catch (error) {
@@ -262,7 +233,7 @@ export function PortalsProvider({ children }: PortalsProviderProps) {
       const inputToken = `${getChainNamePortals(chainId)}:${tokenIn}`;
       const outputToken = `${getChainNamePortals(chainId)}:${tokenOut}`;
       const validate = slippage === null;
-      const response = await axios.get(`${PORTALS_FI_API_URL}/v2/portal`, {
+      const response = await axios.get("/api/portals/portal", {
         params: {
           sender,
           inputToken,
@@ -273,11 +244,7 @@ export function PortalsProvider({ children }: PortalsProviderProps) {
           partner: "0xF066789028fE31D4f53B69B81b328B8218Cc0641",
           validate,
         },
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
+        timeout: 15000,
       });
       return response.data;
     } catch (error) {

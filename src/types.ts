@@ -30,6 +30,25 @@ export interface VaultInfo {
   vaultSymbol: string;
 }
 
+export interface AllocPointData {
+  hVaultId: string;
+  allocPoint: string;
+  apy: string | number;
+}
+
+export interface HarvestVaultData {
+  id: string;
+  estimatedApy: string;
+  totalValueLocked: string;
+  inactive: boolean;
+  vaultAddress?: string;
+  allocPointData?: AllocPointData[];
+  usdPrice?: string;
+  sharePrice?: string;
+  pricePerFullShare?: string;
+  decimals?: number;
+}
+
 export interface Token {
   symbol: string;
   name: string;
