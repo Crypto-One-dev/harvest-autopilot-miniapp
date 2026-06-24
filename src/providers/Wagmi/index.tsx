@@ -17,7 +17,10 @@ export const config = createConfig({
   chains: [base],
   connectors: [
     baseAccount({
-      appName: "Yield Autopilot",
+      appName: "Harvest",
+      preference: {
+        telemetry: false,
+      },
     }),
     injected({ shimDisconnect: true }),
   ],

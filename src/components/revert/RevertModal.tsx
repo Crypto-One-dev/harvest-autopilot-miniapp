@@ -3,7 +3,11 @@ import { useSendTransaction, useWaitForTransactionReceipt } from "wagmi";
 import { Button } from "../Button";
 import { RevertModalProps } from "~/types";
 import { usePortals } from "~/providers/Portals";
-import { formatBalance, truncateAddress, parseTokenUnits } from "~/utilities/parsers";
+import {
+  formatBalance,
+  truncateAddress,
+  parseTokenUnits,
+} from "~/utilities/parsers";
 import BigNumber from "bignumber.js";
 
 export default function RevertModal({
@@ -44,7 +48,10 @@ export default function RevertModal({
         withdrawAmount || "0",
       ).toString();
 
-      const value = parseTokenUnits(safeWithdrawAmount, selectedVault.vaultDecimals);
+      const value = parseTokenUnits(
+        safeWithdrawAmount,
+        selectedVault.vaultDecimals,
+      );
 
       const approval = await getPortalsApproval(
         chainId,
@@ -401,27 +408,38 @@ export default function RevertModal({
     isConfirming;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center pl-2 pr-2">
+    <div
+      className="harvest-modal-overlay"
+      onClick={isTransactionInProgress ? undefined : handleClose}
+    >
       <div
-        className="absolute inset-0 bg-black/50"
-        onClick={handleClose}
-        aria-hidden="true"
-      />
-      <div
-        className="relative bg-white dark:bg-gray-800 rounded-lg p-6 w-[400px] max-w-full"
+        className="harvest-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="revert-modal-title"
         aria-describedby="revert-modal-description"
+        onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex justify-between items-center mb-6">
-          <h2 id="revert-modal-title" className="text-xl font-bold">
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 16,
+          }}
+        >
+          <h2
+            id="revert-modal-title"
+            className="harvest-modal-title"
+            style={{ margin: 0 }}
+          >
             Withdraw to {selectedToken.symbol}
           </h2>
           <button
+            type="button"
             onClick={handleClose}
             disabled={isTransactionInProgress}
-            className={`text-gray-500 hover:text-gray-700 ${isTransactionInProgress ? "cursor-not-allowed opacity-50" : ""}`}
+            className="harvest-modal-close"
             aria-label="Close modal"
           >
             ✕

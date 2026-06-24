@@ -31,7 +31,9 @@ export function middleware(request: NextRequest) {
       wss://*.walletconnect.com 
       wss://*.walletconnect.org
       https://api.portals.fi
-      https://*.portals.fi;
+      https://*.portals.fi
+      https://cca-lite.coinbase.com
+      https://*.amplitude.com;
   `
     .replace(/\s+/g, " ")
     .trim();

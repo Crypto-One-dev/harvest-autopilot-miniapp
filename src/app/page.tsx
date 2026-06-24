@@ -9,7 +9,7 @@ const App = dynamic(() => import("~/components/App"), {
 
 export default function Home() {
   return (
-    <main className="min-h-screen flex flex-col pl-1 pr-1">
+    <main className="min-h-screen">
       <Providers>
         <App />
       </Providers>

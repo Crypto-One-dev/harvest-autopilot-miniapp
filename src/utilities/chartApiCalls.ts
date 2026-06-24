@@ -624,6 +624,83 @@ function filterDataByPeriod(
   return result;
 }
 
+function getSlotCount(daysAgo: number): number {
+  if (daysAgo > 700) return 500;
+  if (daysAgo > 365) return 400;
+  if (daysAgo > 180) return 300;
+  if (daysAgo > 90) return 150;
+  if (daysAgo > 60) return 100;
+  if (daysAgo > 30) return 100;
+  return 50;
+}
+
+function findClosestHistoryPoint(data: any[], slotSec: number): any {
+  return data.reduce((prev, curr) =>
+    Math.abs(Number(curr.timestamp) - slotSec) <
+    Math.abs(Number(prev.timestamp) - slotSec)
+      ? curr
+      : prev,
+  );
+}
+
+export interface PerformanceChartPoint {
+  timestamp: number;
+  sharePrice: number;
+  apy: number;
+  tvl: number;
+}
+
+/**
+ * Builds share price, APY, and TVL on a single shared time grid so each metric
+ * varies correctly when plotted (avoids flat lines from timestamp mismatches).
+ */
+export async function fetchMergedPerformanceChartData(
+  vaultAddress: string,
+  period: string = "30d",
+  chainId: number = 8453,
+  tokenDecimals: number = 18,
+): Promise<PerformanceChartPoint[]> {
+  const { vaultHIPORData, vaultHIPORFlag } = await getIPORVaultHistories(
+    chainId,
+    vaultAddress,
+  );
+
+  if (!vaultHIPORFlag || !vaultHIPORData?.length) {
+    return [];
+  }
+
+  const sortedData = [...vaultHIPORData].sort(
+    (a, b) => Number(a.timestamp) - Number(b.timestamp),
+  );
+
+  const daysAgo = getRangeNumber(period);
+  const slotCount = getSlotCount(daysAgo);
+  const slots = getTimeSlots(daysAgo, slotCount).filter(
+    (ts) => ts >= Number(sortedData[0].timestamp),
+  );
+
+  const shareDivisor = Math.pow(10, tokenDecimals);
+  const APY_MAX_THRESHOLD = 10000;
+
+  return slots
+    .map((slotSec) => {
+      const closest = findClosestHistoryPoint(sortedData, slotSec);
+      const apy = parseFloat(closest.apy || "0");
+
+      if (apy > APY_MAX_THRESHOLD) {
+        return null;
+      }
+
+      return {
+        timestamp: slotSec * 1000,
+        sharePrice: parseFloat(closest.sharePrice || "0") / shareDivisor,
+        apy,
+        tvl: parseFloat(closest.tvl || "0"),
+      };
+    })
+    .filter((point): point is PerformanceChartPoint => point !== null);
+}
+
 /**
  * Fetches all chart data for a vault in parallel
  * @param vaultAddress The vault address

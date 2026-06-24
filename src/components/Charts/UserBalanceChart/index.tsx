@@ -338,7 +338,10 @@ export default function UserBalanceChart({
   });
 
   // Calculate min and max values for better scaling
-  const maxTokenValue = Math.max(...chartData.map((item) => item.tokenValue), 0);
+  const maxTokenValue = Math.max(
+    ...chartData.map((item) => item.tokenValue),
+    0,
+  );
   const tokenMin = 0;
   const tokenMax = maxTokenValue === 0 ? 1 : maxTokenValue * 1.1;
 

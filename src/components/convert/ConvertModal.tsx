@@ -1,11 +1,47 @@
 import React, { useState, useEffect, useCallback } from "react";
+import axios from "axios";
 import { useSendTransaction, useWaitForTransactionReceipt } from "wagmi";
 import { Button } from "../Button";
 import { ConvertModalProps } from "~/types";
 import { usePortals } from "~/providers/Portals";
-import { formatBalance, truncateAddress, parseTokenUnits } from "~/utilities/parsers";
+import {
+  formatBalance,
+  truncateAddress,
+  parseTokenUnits,
+} from "~/utilities/parsers";
+import { isNativeEthToken } from "~/utilities/portalsTokens";
+import {
+  getPortalsWithRetry,
+  isPortalsApprovalSufficient,
+  isTransferFromFailed,
+  waitForPortalsApproval,
+  type PortalsApprovalContext,
+} from "~/utilities/portalsApproval";
 import BigNumber from "bignumber.js";
 import { SUPPORTED_VAULTS } from "~/constants";
+
+type ActiveTx = {
+  hash: `0x${string}`;
+  kind: "approve" | "deposit";
+};
+
+function parsePortalsError(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const apiMessage = error.response?.data?.message;
+    if (typeof apiMessage === "string") {
+      if (apiMessage.includes("TRANSFER_FROM_FAILED")) {
+        return "Approval is still syncing on Base. Wait a few seconds, then tap Convert again.";
+      }
+      return apiMessage;
+    }
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return "Failed to convert tokens. Please try again.";
+}
 
 export default function ConvertModal({
   chainId,
@@ -18,9 +54,10 @@ export default function ConvertModal({
   walletAddress,
   handleWalletInteraction,
 }: ConvertModalProps) {
-  const [txHash, setTxHash] = useState<`0x${string}` | null>(null);
+  const [activeTx, setActiveTx] = useState<ActiveTx | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [needsApproval, setNeedsApproval] = useState(true);
+  const [isApprovalReady, setIsApprovalReady] = useState(false);
   const [isWaitingForApproval, setIsWaitingForApproval] = useState(false);
   const [isApproveLoading, setIsApproveLoading] = useState(false);
   const [isDepositLoading, setIsDepositLoading] = useState(false);
@@ -31,185 +68,176 @@ export default function ConvertModal({
   const sendTransaction = useSendTransaction();
   const { isLoading: isConfirming, isSuccess: isConfirmed } =
     useWaitForTransactionReceipt({
-      hash: txHash as `0x${string}`,
+      hash: activeTx?.hash,
     });
 
-  const checkApproval = useCallback(async () => {
-    if (!walletAddress || !selectedToken.address || !vaultAddress) return;
+  const getRequiredAmount = useCallback((): string => {
+    const safeDepositAmount = new BigNumber(depositAmount || "0").toString();
+    return parseTokenUnits(
+      safeDepositAmount,
+      selectedToken.decimals,
+    ).toString();
+  }, [depositAmount, selectedToken.decimals]);
+
+  const fetchApprovalContext =
+    useCallback(async (): Promise<PortalsApprovalContext | null> => {
+      if (!walletAddress || !selectedToken.address) return null;
+
+      const context = await getPortalsApproval(
+        chainId,
+        walletAddress,
+        selectedToken.address,
+        getRequiredAmount(),
+      );
+
+      return context ?? null;
+    }, [
+      walletAddress,
+      selectedToken.address,
+      chainId,
+      getPortalsApproval,
+      getRequiredAmount,
+    ]);
+
+  const checkApproval = useCallback(async (): Promise<boolean> => {
+    if (!walletAddress || !selectedToken.address || !vaultAddress) return false;
 
     try {
-      // Ensure depositAmount is a valid number string before parsing
-      const safeDepositAmount = new BigNumber(depositAmount || "0").toString();
-
-      const value = parseTokenUnits(safeDepositAmount, selectedToken.decimals);
-
-      // Check if this is native ETH (multiple possible representations)
-      const isNativeETH =
-        selectedToken.address ===
-          "0x0000000000000000000000000000000000000000" ||
-        selectedToken.address.toLowerCase() ===
-          "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" ||
-        selectedToken.symbol?.toLowerCase() === "eth";
-
-      if (isNativeETH) {
+      if (isNativeEthToken(selectedToken)) {
         setNeedsApproval(false);
+        setIsApprovalReady(true);
         setCurrentStep(1);
-        return;
+        setIsWaitingForApproval(false);
+        return true;
       }
 
-      try {
-        const approval = await getPortalsApproval(
-          chainId,
-          String(walletAddress),
-          selectedToken.address,
-        );
-        const allowance = approval ? approval.allowance : "0";
+      const requiredAmount = getRequiredAmount();
+      const context = await fetchApprovalContext();
+      const hasAllowance = isPortalsApprovalSufficient(context, requiredAmount);
 
-        const needsApprove = !new BigNumber(allowance.toString()).gte(
-          new BigNumber(value.toString()),
-        );
+      setNeedsApproval(!hasAllowance);
+      setIsApprovalReady(hasAllowance);
 
-        // Update needs approval state
-        setNeedsApproval(needsApprove);
-
-        // Important: Update the current step based on approval status
-        if (!needsApprove) {
-          setCurrentStep(1); // Move to Convert step
-        } else {
-          setCurrentStep(0); // Stay at Approve step
-        }
-
-        // Reset any waiting state
+      if (hasAllowance) {
+        setCurrentStep(1);
         setIsWaitingForApproval(false);
-      } catch (error) {
-        console.error("Error checking approval:", error);
-        // If we fail to check approval, let's just proceed to approval step
-        setNeedsApproval(true);
+      } else {
         setCurrentStep(0);
       }
+
+      return hasAllowance;
     } catch (err) {
       console.error("Error in approval flow:", err);
       setError("Failed to check token approval. Please try again.");
+      setNeedsApproval(true);
+      setIsApprovalReady(false);
       setCurrentStep(0);
       setIsWaitingForApproval(false);
+      return false;
     }
   }, [
     walletAddress,
-    selectedToken.address,
-    selectedToken.decimals,
-    selectedToken.symbol,
+    selectedToken,
     vaultAddress,
-    depositAmount,
-    chainId,
-    getPortalsApproval,
+    fetchApprovalContext,
+    getRequiredAmount,
   ]);
 
-  // Handle transaction confirmation
+  const waitUntilApprovalReady = useCallback(async (): Promise<boolean> => {
+    const requiredAmount = getRequiredAmount();
+    const ready = await waitForPortalsApproval(
+      fetchApprovalContext,
+      requiredAmount,
+      { attempts: 15, intervalMs: 2000 },
+    );
+
+    setIsApprovalReady(ready);
+    setNeedsApproval(!ready);
+
+    if (ready) {
+      setCurrentStep(1);
+      setIsWaitingForApproval(false);
+      setError(null);
+    }
+
+    return ready;
+  }, [fetchApprovalContext, getRequiredAmount]);
+
   useEffect(() => {
-    if (isConfirmed && txHash) {
-      if (isWaitingForApproval) {
-        setIsWaitingForApproval(false);
-        // Don't reset currentStep here - wait until checkApproval completes
+    if (!isConfirmed || !activeTx) return;
 
-        // When approval is confirmed, immediately check if we need further approval
-        if (currentStep === 0) {
-          checkApproval(); // This will set the correct step based on approval status
+    if (activeTx.kind === "approve") {
+      setIsWaitingForApproval(true);
+      void waitUntilApprovalReady().then((ready) => {
+        if (!ready) {
+          setError(
+            "Approval is still pending. Wait for confirmation on Base, then tap Convert again.",
+          );
         }
-      }
+      });
+      return;
+    }
 
-      // If we're already at step 2, update balances and analytics
-      if (currentStep === 2 && !analyticsSent) {
-        // Find the corresponding vault to get the vaultSymbol
-        const vault = SUPPORTED_VAULTS.find(
-          (v) => v.vaultAddress.toLowerCase() === vaultAddress?.toLowerCase(),
-        );
+    if (activeTx.kind === "deposit" && currentStep === 2 && !analyticsSent) {
+      const vault = SUPPORTED_VAULTS.find(
+        (v) => v.vaultAddress.toLowerCase() === vaultAddress?.toLowerCase(),
+      );
 
-        // Only send analytics if transaction is successful and not sent before
-        setAnalyticsSent(true); // Mark analytics as sent
-
-        // Log analytics for convert action
-        fetch("/api/analytics", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            action: "convert",
-            tokenSymbol: selectedToken.symbol,
-            tokenAddress: selectedToken.address,
-            amount: depositAmount,
-            vaultAddress: vaultAddress,
-            vaultSymbol: vault?.vaultSymbol || "",
-            txHash: txHash,
-            chainId: chainId,
-            walletAddress: walletAddress,
-          }),
-        }).catch(console.error); // Handle error silently
-      }
+      setAnalyticsSent(true);
+      fetch("/api/analytics", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "convert",
+          tokenSymbol: selectedToken.symbol,
+          tokenAddress: selectedToken.address,
+          amount: depositAmount,
+          vaultAddress: vaultAddress,
+          vaultSymbol: vault?.vaultSymbol || "",
+          txHash: activeTx.hash,
+          chainId: chainId,
+          walletAddress: walletAddress,
+        }),
+      }).catch(console.error);
     }
   }, [
     isConfirmed,
-    isWaitingForApproval,
+    activeTx,
     currentStep,
     selectedToken,
     depositAmount,
     vaultAddress,
-    txHash,
     chainId,
     walletAddress,
-    checkApproval,
-    onSuccess,
+    waitUntilApprovalReady,
     analyticsSent,
   ]);
 
-  // Check approval when modal opens
   useEffect(() => {
     if (isOpen) {
-      checkApproval();
+      void checkApproval();
     }
   }, [isOpen, checkApproval]);
-
-  // Add a polling mechanism to recheck approval status after a transaction
-  useEffect(() => {
-    let timerId: NodeJS.Timeout | null = null;
-
-    // When an approval transaction is confirmed, check approval status multiple times
-    if (isConfirmed && isWaitingForApproval && currentStep === 0) {
-      // Set up polling to check approval status
-      let checkCount = 0;
-
-      const recheckApproval = () => {
-        checkCount++;
-
-        checkApproval().then(() => {
-          // If we still need approval after 5 checks, stop checking
-          if (checkCount >= 5) {
-            if (timerId) clearInterval(timerId);
-            // Force move to next step if we've checked 5 times
-            setNeedsApproval(false);
-            setCurrentStep(1);
-            setIsWaitingForApproval(false);
-          }
-        });
-      };
-
-      // Check immediately and then every 3 seconds
-      recheckApproval();
-      timerId = setInterval(recheckApproval, 3000);
-    }
-
-    // Clean up interval
-    return () => {
-      if (timerId) clearInterval(timerId);
-    };
-  }, [isConfirmed, isWaitingForApproval, currentStep, checkApproval]);
 
   const handleApprove = async () => {
     if (!walletAddress || !selectedToken.address || !vaultAddress) return;
 
-    if (isConfirmed && txHash && !isWaitingForApproval) {
+    if (isNativeEthToken(selectedToken)) {
       setNeedsApproval(false);
+      setIsApprovalReady(true);
       setCurrentStep(1);
+      setError(null);
+      return;
+    }
+
+    if (
+      activeTx?.kind === "approve" &&
+      isConfirmed &&
+      !isWaitingForApproval &&
+      !needsApproval
+    ) {
       return;
     }
 
@@ -218,41 +246,24 @@ export default function ConvertModal({
         setIsApproveLoading(true);
         setError(null);
         setIsWaitingForApproval(true);
-        setCurrentStep(0); // Ensure we're on approval step
+        setIsApprovalReady(false);
+        setCurrentStep(0);
 
-        // Ensure depositAmount is a valid number string before parsing
-        const safeDepositAmount = new BigNumber(
-          depositAmount || "0",
-        ).toString();
-
-        const value = parseTokenUnits(safeDepositAmount, selectedToken.decimals);
-
+        const value = getRequiredAmount();
         const approvalData = await portalsApprove(
           chainId,
           walletAddress,
           selectedToken.address,
-          value.toString(),
+          value,
         );
 
-        // Add more detailed checking and logging for approval data
-        if (!approvalData) {
-          console.error(
-            "No approval data returned - this could mean approval is already sufficient",
-          );
-          setNeedsApproval(false);
-          setCurrentStep(1);
-          setIsWaitingForApproval(false);
-          setIsApproveLoading(false);
-          return;
-        }
+        if (!approvalData?.approve) {
+          const alreadyApproved = await checkApproval();
+          if (alreadyApproved) {
+            return;
+          }
 
-        if (!approvalData.approve) {
-          console.error("Approval data missing 'approve' field:", approvalData);
-          setNeedsApproval(false);
-          setCurrentStep(1);
-          setIsWaitingForApproval(false);
-          setIsApproveLoading(false);
-          return;
+          throw new Error("Failed to get approval data from Portals");
         }
 
         const hash = await sendTransaction.mutateAsync({
@@ -261,20 +272,14 @@ export default function ConvertModal({
         });
 
         if (hash) {
-          setTxHash(hash);
+          setActiveTx({ hash, kind: "approve" });
         }
-        setNeedsApproval(false);
-        setCurrentStep(1); // Explicitly set to step 1 (Convert)
       } catch (error: unknown) {
         console.error("Approval error:", error);
-        const message =
-          error instanceof Error
-            ? error.message
-            : "Failed to approve token. Please try again.";
-
-        setError(message);
+        setError(parsePortalsError(error));
         setIsWaitingForApproval(false);
-        setCurrentStep(0); // Reset to approval step on error
+        setIsApprovalReady(false);
+        setCurrentStep(0);
       } finally {
         setIsApproveLoading(false);
       }
@@ -284,34 +289,40 @@ export default function ConvertModal({
   const handleDeposit = async () => {
     if (!walletAddress || !selectedToken.address || !vaultAddress) return;
 
+    const tokenIn = selectedToken.address;
+
     await handleWalletInteraction(async () => {
       try {
         setIsDepositLoading(true);
         setError(null);
 
-        // Ensure depositAmount is a valid number string before parsing
-        const safeDepositAmount = new BigNumber(
-          depositAmount || "0",
-        ).toString();
+        const value = getRequiredAmount();
 
-        const value = parseTokenUnits(safeDepositAmount, selectedToken.decimals);
+        if (!isNativeEthToken(selectedToken)) {
+          const ready = isApprovalReady ? true : await waitUntilApprovalReady();
 
-        // Ensure we have valid addresses before proceeding
-        const tokenInAddress = selectedToken.address;
-        const tokenOutAddress = vaultAddress;
-
-        if (!tokenInAddress || !tokenOutAddress) {
-          throw new Error("Invalid token addresses");
+          if (!ready) {
+            setError(
+              "Token approval is not active yet. Wait for your approval transaction to confirm on Base, then try Convert again.",
+            );
+            setNeedsApproval(true);
+            setCurrentStep(0);
+            return;
+          }
         }
 
-        const portalData = await getPortals({
-          chainId,
-          sender: walletAddress,
-          tokenIn: selectedToken.address as string,
-          inputAmount: value.toString(),
-          tokenOut: vaultAddress as string,
-          slippage: null,
-        });
+        const portalData = await getPortalsWithRetry(
+          () =>
+            getPortals({
+              chainId,
+              sender: walletAddress,
+              tokenIn,
+              inputAmount: value,
+              tokenOut: vaultAddress,
+              slippage: null,
+            }),
+          { attempts: 8, intervalMs: 2500 },
+        );
 
         if (!portalData?.tx) {
           throw new Error("Failed to get portal data from Portals");
@@ -324,17 +335,20 @@ export default function ConvertModal({
         });
 
         if (hash) {
-          setTxHash(hash);
+          setActiveTx({ hash, kind: "deposit" });
           setCurrentStep(2);
         }
       } catch (error: unknown) {
         console.error("Deposit error:", error);
-        const message =
-          error instanceof Error
-            ? error.message
-            : "Failed to convert tokens. Please try again.";
-
+        const message = parsePortalsError(error);
         setError(message);
+
+        if (isTransferFromFailed(error)) {
+          setNeedsApproval(false);
+          setIsApprovalReady(false);
+          setCurrentStep(1);
+          void waitUntilApprovalReady();
+        }
       } finally {
         setIsDepositLoading(false);
       }
@@ -348,18 +362,17 @@ export default function ConvertModal({
       isDepositLoading ||
       isConfirming
     ) {
-      return; // Prevent closing while transactions are in progress
+      return;
     }
-    // Reset all state when closing
-    setTxHash(null);
+
+    setActiveTx(null);
     setCurrentStep(0);
     setError(null);
     setNeedsApproval(true);
+    setIsApprovalReady(false);
     setIsWaitingForApproval(false);
     setAnalyticsSent(false);
 
-    // Close the modal without calling onSuccess again
-    // The onSuccess was already called when the transaction was confirmed
     if (currentStep === 2) {
       onSuccess?.();
     } else {
@@ -369,8 +382,7 @@ export default function ConvertModal({
   };
 
   if (!isOpen) {
-    // Clean up state when modal is not open
-    if (txHash) setTxHash(null);
+    if (activeTx) setActiveTx(null);
     return null;
   }
 
@@ -380,28 +392,43 @@ export default function ConvertModal({
     isDepositLoading ||
     isConfirming;
 
+  const canConvert =
+    currentStep === 1 ||
+    (currentStep === 0 && !needsApproval && isApprovalReady);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center pl-2 pr-2">
+    <div
+      className="harvest-modal-overlay"
+      onClick={isTransactionInProgress ? undefined : handleClose}
+    >
       <div
-        className="absolute inset-0 bg-black/50"
-        onClick={handleClose}
-        aria-hidden="true"
-      />
-      <div
-        className="relative bg-white dark:bg-gray-800 rounded-lg p-6 w-[400px] max-w-full"
+        className="harvest-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="convert-modal-title"
         aria-describedby="convert-modal-description"
+        onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex justify-between items-center mb-6">
-          <h2 id="convert-modal-title" className="text-xl font-bold">
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 16,
+          }}
+        >
+          <h2
+            id="convert-modal-title"
+            className="harvest-modal-title"
+            style={{ margin: 0 }}
+          >
             Convert {selectedToken.symbol}
           </h2>
           <button
+            type="button"
             onClick={handleClose}
             disabled={isTransactionInProgress}
-            className={`text-gray-500 hover:text-gray-700 ${isTransactionInProgress ? "cursor-not-allowed opacity-50" : ""}`}
+            className="harvest-modal-close"
             aria-label="Close modal"
           >
             ✕
@@ -413,7 +440,6 @@ export default function ConvertModal({
           may require approval before conversion.
         </div>
 
-        {/* Progress Steps */}
         <div className="mb-6">
           <div className="flex justify-between mb-2">
             <div
@@ -434,12 +460,15 @@ export default function ConvertModal({
                   : "Approve"
                 : "Approved"}
             </span>
-            <span>Convert</span>
+            <span>
+              {canConvert && !isApprovalReady
+                ? "Syncing approval..."
+                : "Convert"}
+            </span>
             <span>Complete</span>
           </div>
         </div>
 
-        {/* Transaction Details */}
         <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 mb-6">
           <div className="flex justify-between mb-2">
             <span className="text-gray-600 dark:text-gray-300">Amount</span>
@@ -457,25 +486,23 @@ export default function ConvertModal({
               </div>
             </div>
           </div>
-          {/* Transaction Hash Display */}
-          {txHash && (
+          {activeTx && (
             <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
               <div className="text-sm text-gray-600 dark:text-gray-300 mb-1">
                 Transaction Hash:
               </div>
               <a
-                href={`https://basescan.org/tx/${txHash}`}
+                href={`https://basescan.org/tx/${activeTx.hash}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="block break-all text-sm font-mono bg-gray-100 dark:bg-gray-600 p-2 rounded hover:bg-gray-200 dark:hover:bg-gray-500 transition-colors text-purple-600 dark:text-purple-400"
               >
-                {truncateAddress(txHash)}
+                {truncateAddress(activeTx.hash)}
               </a>
             </div>
           )}
         </div>
 
-        {/* Error Message */}
         {error && (
           <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-4 rounded-lg mb-6">
             <div
@@ -487,25 +514,31 @@ export default function ConvertModal({
           </div>
         )}
 
-        {/* Action Button */}
         <Button
           onClick={
             currentStep === 0 && needsApproval
               ? handleApprove
-              : currentStep === 1 || (currentStep === 0 && !needsApproval)
+              : canConvert
                 ? handleDeposit
                 : handleClose
           }
           disabled={
-            isTransactionInProgress || (currentStep === 2 && !isConfirmed)
+            isTransactionInProgress ||
+            (currentStep === 2 && !isConfirmed) ||
+            (canConvert && !isApprovalReady) ||
+            (currentStep === 0 && isWaitingForApproval)
           }
           isLoading={isTransactionInProgress}
           className="w-full relative"
         >
           {currentStep === 0 && needsApproval
-            ? "Approve"
-            : currentStep === 1 || (currentStep === 0 && !needsApproval)
-              ? "Convert"
+            ? isWaitingForApproval
+              ? "Confirming approval..."
+              : "Approve"
+            : canConvert
+              ? isApprovalReady
+                ? "Convert"
+                : "Syncing approval..."
               : "Complete"}
           {isTransactionInProgress && (
             <div className="absolute inset-0 flex items-center justify-center">

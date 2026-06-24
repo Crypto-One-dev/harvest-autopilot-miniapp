@@ -1,16 +1,6 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
-
-interface HarvestVaultData {
-  id: string;
-  estimatedApy: string;
-  totalValueLocked: string;
-  inactive: boolean;
-  usdPrice?: string; // Token price in USD
-  sharePrice?: string; // Vault share price
-  pricePerFullShare?: string; // Alternative field that might be available
-  decimals?: number; // Vault decimals for price calculation
-}
+import type { HarvestVaultData } from "~/types";
 
 interface VaultsData {
   [vaultId: string]: HarvestVaultData;
@@ -130,3 +120,5 @@ export function useVaultsData(): UseVaultsDataReturn {
 
   return { vaultsData, loading, error, refetch: fetchData };
 }
+
+export type { HarvestVaultData, VaultsData };
