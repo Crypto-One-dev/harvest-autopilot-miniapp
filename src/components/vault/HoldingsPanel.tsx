@@ -1,8 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { JSX } from "react";
-import type { TokenInfo } from "~/types";
-import { formatBalance } from "~/utilities/parsers";
+import type { HarvestVaultData, TokenInfo, VaultInfo } from "~/types";
+import {
+  formatBalance,
+  formatCtaAmount,
+  formatUsd,
+} from "~/utilities/parsers";
 import { displayDepositSymbol, getTokenIconPath } from "~/utilities/tokenIcons";
+import { getVaultUnderlyingBalance, getUnderlyingUsdPrice } from "~/utilities/vaultBalances";
 import { ChevronDownIcon } from "~/components/icons";
 
 export type HoldingsMode = "deposit" | "withdraw";
@@ -62,20 +67,20 @@ function TokenSelectField({
 interface YieldEstimateProps {
   amount: number;
   apy: number;
-  tokenLabel: string;
+  tokenUsdPrice: number;
 }
 
 function YieldEstimate({
   amount,
   apy,
-  tokenLabel,
+  tokenUsdPrice,
 }: YieldEstimateProps): JSX.Element {
   const [open, setOpen] = useState(false);
-  const yearlyYield = amount * (apy / 100);
+  const yearlyYieldUsd = amount * tokenUsdPrice * (apy / 100);
 
   useEffect(() => {
     setOpen(false);
-  }, [amount, apy, tokenLabel]);
+  }, [amount, apy, tokenUsdPrice]);
 
   return (
     <div className={`yield-estimate${open ? " is-expanded" : ""}`}>
@@ -93,7 +98,7 @@ function YieldEstimate({
           </button>
         </span>
         <span className="yield-estimate-value">
-          ≈ {formatBalance(yearlyYield.toString())} {tokenLabel} / yr
+          ≈ {formatUsd(yearlyYieldUsd)} / yr
         </span>
       </div>
       {open && <p className="yield-estimate-disclaimer">{YIELD_DISCLAIMER}</p>}
@@ -103,10 +108,11 @@ function YieldEstimate({
 
 interface HoldingsPanelProps {
   mode: HoldingsMode;
+  vault: VaultInfo;
   selectedToken: TokenInfo;
   depositAmount: string;
   vaultBalance: TokenInfo | null;
-  vaultSymbol: string;
+  vaultsData?: Record<string, HarvestVaultData> | null;
   estimatedApy?: string | null;
   isConnected: boolean;
   isConnecting: boolean;
@@ -118,10 +124,11 @@ interface HoldingsPanelProps {
 
 export default function HoldingsPanel({
   mode,
+  vault,
   selectedToken,
   depositAmount,
   vaultBalance,
-  vaultSymbol,
+  vaultsData,
   estimatedApy,
   isConnected,
   isConnecting,
@@ -136,7 +143,22 @@ export default function HoldingsPanel({
   const tokenLabel = isDeposit
     ? displayDepositSymbol(selectedToken.symbol)
     : selectedToken.symbol;
+  const underlyingSymbol = vault.symbol;
+  const vaultData = vaultsData?.[vault.id] ?? null;
   const apy = estimatedApy ? parseFloat(estimatedApy) : 0;
+  const tokenUsdPrice =
+    parseFloat(selectedToken.price || "0") || getUnderlyingUsdPrice(vaultData);
+  const underlyingPosition = useMemo(
+    () =>
+      getVaultUnderlyingBalance(vaultBalance, vaultData, vault.decimals),
+    [vaultBalance, vaultData, vault.decimals],
+  );
+
+  const availableBalance = isDeposit
+    ? selectedToken.balance
+    : underlyingPosition.underlying.toString();
+
+  const availableSymbol = isDeposit ? tokenLabel : underlyingSymbol;
 
   const buttonLabel = !hasAmount
     ? "Enter an amount"
@@ -145,14 +167,15 @@ export default function HoldingsPanel({
         ? "Connecting..."
         : "Connect wallet"
       : isDeposit
-        ? `Deposit ${depositAmount} ${tokenLabel}`.trim()
-        : `Exit ${depositAmount} ${vaultSymbol}`.trim();
+        ? `Deposit ${formatCtaAmount(depositAmount)} ${tokenLabel}`.trim()
+        : `Exit ${formatCtaAmount(depositAmount)} ${underlyingSymbol}`.trim();
 
-  const availableBalance = isDeposit
-    ? selectedToken.balance
-    : (vaultBalance?.balance ?? "0");
-
-  const availableSymbol = isDeposit ? tokenLabel : vaultSymbol;
+  const balanceUsd =
+    !isDeposit && isConnected
+      ? underlyingPosition.usd > 0
+        ? `≈ ${formatUsd(underlyingPosition.usd)}`
+        : ""
+      : "";
 
   return (
     <div className="panel">
@@ -165,12 +188,32 @@ export default function HoldingsPanel({
         />
       )}
 
+      {!isDeposit && isConnected && (
+        <div className="position-box holdings-balance-box">
+          <span className="position-ico" aria-hidden="true">
+            <img
+              src={getTokenIconPath(vault)}
+              alt={underlyingSymbol}
+              width={20}
+              height={20}
+              className="token-art"
+            />
+          </span>
+          <span className="position-label">My Balance</span>
+          <span className="position-value">
+            {formatBalance(underlyingPosition.underlying.toString())}{" "}
+            {underlyingSymbol}
+          </span>
+          {balanceUsd && <span className="position-usd">{balanceUsd}</span>}
+        </div>
+      )}
+
       <div className="form-field">
         <div className="field-row">
           <label className="field-label" htmlFor="deposit-amount">
             Enter amount
           </label>
-          {isConnected && (
+          {isConnected && isDeposit && (
             <button
               type="button"
               className="field-balance"
@@ -178,7 +221,7 @@ export default function HoldingsPanel({
             >
               My Balance:{" "}
               <span className="field-balance-value">
-                {formatBalance(availableBalance)} {availableSymbol}
+                {formatBalance(availableBalance)}
               </span>
             </button>
           )}
@@ -200,12 +243,18 @@ export default function HoldingsPanel({
           <button type="button" className="max-btn" onClick={onMaxAmount}>
             MAX
           </button>
-          <span className="amount-token">{availableSymbol}</span>
+          {!isDeposit && (
+            <span className="amount-token">{availableSymbol}</span>
+          )}
         </div>
       </div>
 
-      {isDeposit && hasAmount && apy > 0 && (
-        <YieldEstimate amount={amount} apy={apy} tokenLabel={tokenLabel} />
+      {isDeposit && hasAmount && apy > 0 && tokenUsdPrice > 0 && (
+        <YieldEstimate
+          amount={amount}
+          apy={apy}
+          tokenUsdPrice={tokenUsdPrice}
+        />
       )}
 
       {!isDeposit && (

@@ -56,20 +56,25 @@ export const FALLBACK_TOKEN_ICON =
 
 export const VAULT_DISPLAY_ORDER = ["WETH", "USDC", "cbBTC"] as const;
 
+export const SOCIAL_LINKS = {
+  TWITTER: "https://twitter.com/harvest_finance",
+  DISCORD: "https://discord.gg/ePZKmST7yn",
+} as const;
+
 export const VAULT_DISPLAY: Record<
   string,
   { title: string; subtitle: string }
 > = {
   WETH: {
     title: "WETH Autopilot",
-    subtitle: "Auto-compounding WETH yield on Base.",
+    subtitle: "Auto-compounding",
   },
   USDC: {
     title: "USDC Autopilot",
-    subtitle: "Auto-compounding USDC yield on Base.",
+    subtitle: "Auto-compounding",
   },
   cbBTC: {
     title: "cbBTC Autopilot",
-    subtitle: "Auto-compounding cbBTC yield on Base.",
+    subtitle: "Auto-compounding",
   },
 };

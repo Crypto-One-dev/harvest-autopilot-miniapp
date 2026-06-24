@@ -15,6 +15,23 @@ export function formatBalance(value: string | number): string {
   return num.toFixed(6).replace(/\.?0+$/, "");
 }
 
+export function formatUsd(value: string | number): string {
+  const num = typeof value === "string" ? parseFloat(value) : value;
+  if (!Number.isFinite(num) || num === 0) return "$0";
+  if (num < 0.01) return "<$0.01";
+  if (num >= 1000) {
+    return `$${num.toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+  }
+  return `$${formatBalance(num)}`;
+}
+
+export function formatCtaAmount(value: string | number): string {
+  return formatBalance(value);
+}
+
 export function getChainNamePortals(chainId: number): string {
   switch (chainId) {
     case 1:
