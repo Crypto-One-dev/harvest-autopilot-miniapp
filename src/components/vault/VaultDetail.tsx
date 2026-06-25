@@ -158,10 +158,11 @@ export default function VaultDetail({
         {activeTab === "enter" && (
           <HoldingsPanel
             mode="deposit"
+            vault={vault}
             selectedToken={selectedToken}
             depositAmount={depositAmount}
             vaultBalance={vaultBalance}
-            vaultSymbol={vault.vaultSymbol}
+            vaultsData={vaultsData}
             estimatedApy={data?.estimatedApy ?? null}
             isConnected={isConnected}
             isConnecting={isConnecting}
@@ -175,10 +176,11 @@ export default function VaultDetail({
         {activeTab === "exit" && (
           <HoldingsPanel
             mode="withdraw"
+            vault={vault}
             selectedToken={selectedToken}
             depositAmount={depositAmount}
             vaultBalance={vaultBalance}
-            vaultSymbol={vault.vaultSymbol}
+            vaultsData={vaultsData}
             isConnected={isConnected}
             isConnecting={isConnecting}
             onTokenSelect={onTokenSelect}

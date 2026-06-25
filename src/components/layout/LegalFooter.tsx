@@ -1,8 +1,30 @@
 import type { JSX } from "react";
+import { SOCIAL_LINKS } from "~/constants";
+import { DiscordIcon, XIcon } from "~/components/icons";
 
 export default function LegalFooter(): JSX.Element {
   return (
     <footer className="legal-footer">
+      <div className="social-links">
+        <a
+          href={SOCIAL_LINKS.TWITTER}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="social-link"
+          aria-label="Harvest on X"
+        >
+          <XIcon />
+        </a>
+        <a
+          href={SOCIAL_LINKS.DISCORD}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="social-link"
+          aria-label="Harvest on Discord"
+        >
+          <DiscordIcon />
+        </a>
+      </div>
       <p>
         By participating in any of the products you accept our{" "}
         <a

@@ -22,6 +22,11 @@ import RevertModal from "./revert/RevertModal";
 import type { TokenInfo, VaultInfo, Token } from "~/types";
 import { usePortals } from "~/providers/Portals";
 import { formatBalance } from "~/utilities/parsers";
+import {
+  getSharePriceFromVaultData,
+  getVaultUnderlyingBalance,
+  underlyingToShares,
+} from "~/utilities/vaultBalances";
 import { useVaultsData } from "~/hooks/useVaultsData";
 
 import { SUPPORTED_VAULTS, FALLBACK_TOKEN_ICON } from "~/constants";
@@ -75,6 +80,21 @@ export default function App(): JSX.Element {
   const [detailTab, setDetailTab] = useState<VaultTab>("enter");
   const [pendingTokenSelectOpen, setPendingTokenSelectOpen] = useState(false);
   const balanceFetchInFlight = useRef(false);
+
+  const toWithdrawShareAmount = useCallback(
+    (underlyingAmount: string, vault: VaultInfo): string => {
+      const sharePrice = getSharePriceFromVaultData(
+        vaultsData?.[vault.id],
+        vault.decimals,
+      );
+      const underlying = parseFloat(underlyingAmount);
+      if (!Number.isFinite(underlying) || underlying <= 0) {
+        return underlyingAmount;
+      }
+      return underlyingToShares(underlying, sharePrice).toString();
+    },
+    [vaultsData],
+  );
 
   // Show notification function
   const showNotification = (
@@ -569,11 +589,15 @@ export default function App(): JSX.Element {
     }
 
     const vaultBalance = getVaultBalance(selectedVault);
-    if (vaultBalance) {
-      const balance = new BigNumber(vaultBalance.rawBalance || "0")
-        .div(new BigNumber(10).pow(vaultBalance.decimals))
-        .toString();
-      setDepositAmount(balance);
+    const vault =
+      activeVault ?? SUPPORTED_VAULTS.find((v) => v.symbol === selectedVault);
+    if (vaultBalance && vault) {
+      const { underlying } = getVaultUnderlyingBalance(
+        vaultBalance,
+        vaultsData?.[vault.id],
+        vault.decimals,
+      );
+      setDepositAmount(underlying.toString());
     }
   };
 
@@ -609,17 +633,18 @@ export default function App(): JSX.Element {
     // For withdraw flow
     else if (currentAction === "withdraw") {
       const vaultBalance = getVaultBalance(selectedVault);
-      if (vaultBalance) {
-        const availableBalance = new BigNumber(vaultBalance.rawBalance).div(
-          new BigNumber(10).pow(vaultBalance.decimals),
+      const vault =
+        activeVault ?? SUPPORTED_VAULTS.find((v) => v.symbol === selectedVault);
+      if (vaultBalance && vault) {
+        const { underlying } = getVaultUnderlyingBalance(
+          vaultBalance,
+          vaultsData?.[vault.id],
+          vault.decimals,
         );
 
-        if (new BigNumber(depositAmount).gt(availableBalance)) {
-          const vaultSymbol =
-            SUPPORTED_VAULTS.find((v) => v.symbol === selectedVault)
-              ?.vaultSymbol || "";
+        if (new BigNumber(depositAmount).gt(underlying)) {
           showNotification(
-            `Insufficient ${vaultSymbol} balance. Available: ${formatBalance(vaultBalance.balance)}`,
+            `Insufficient ${vault.symbol} balance. Available: ${formatBalance(underlying.toString())}`,
             "error",
           );
           return;
@@ -663,17 +688,18 @@ export default function App(): JSX.Element {
     }
 
     const vaultBalance = getVaultBalance(selectedVault);
-    if (vaultBalance) {
-      const availableBalance = new BigNumber(vaultBalance.rawBalance).div(
-        new BigNumber(10).pow(vaultBalance.decimals),
+    const vault =
+      activeVault ?? SUPPORTED_VAULTS.find((v) => v.symbol === selectedVault);
+    if (vaultBalance && vault) {
+      const { underlying } = getVaultUnderlyingBalance(
+        vaultBalance,
+        vaultsData?.[vault.id],
+        vault.decimals,
       );
 
-      if (new BigNumber(depositAmount).gt(availableBalance)) {
-        const vaultSymbol =
-          SUPPORTED_VAULTS.find((v) => v.symbol === selectedVault)
-            ?.vaultSymbol || "";
+      if (new BigNumber(depositAmount).gt(underlying)) {
         showNotification(
-          `Insufficient ${vaultSymbol} balance. Available: ${formatBalance(vaultBalance.balance)}`,
+          `Insufficient ${vault.symbol} balance. Available: ${formatBalance(underlying.toString())}`,
           "error",
         );
         return;
@@ -803,7 +829,7 @@ export default function App(): JSX.Element {
           isOpen={isRevertModalOpen}
           onClose={() => setIsRevertModalOpen(false)}
           selectedToken={selectedToken}
-          withdrawAmount={depositAmount}
+          withdrawAmount={toWithdrawShareAmount(depositAmount, activeVault)}
           selectedVault={activeVault}
           onSuccess={handleRevertSuccess}
           walletAddress={walletAddress}
@@ -900,13 +926,16 @@ export default function App(): JSX.Element {
                         setDepositAmount(balance);
                       } else if (currentAction === "withdraw") {
                         const vaultBalance = getVaultBalance(selectedVault);
-                        if (vaultBalance) {
-                          const balance = new BigNumber(
-                            vaultBalance.rawBalance || "0",
-                          )
-                            .div(new BigNumber(10).pow(vaultBalance.decimals))
-                            .toString();
-                          setDepositAmount(balance);
+                        const vault =
+                          activeVault ??
+                          SUPPORTED_VAULTS.find((v) => v.symbol === selectedVault);
+                        if (vaultBalance && vault) {
+                          const { underlying } = getVaultUnderlyingBalance(
+                            vaultBalance,
+                            vaultsData?.[vault.id],
+                            vault.decimals,
+                          );
+                          setDepositAmount(underlying.toString());
                         }
                       }
                     }}
@@ -923,14 +952,24 @@ export default function App(): JSX.Element {
                 <span className="font-medium">
                   {currentAction === "deposit"
                     ? formatBalance(selectedToken?.balance || "0")
-                    : formatBalance(
-                        getVaultBalance(selectedVault)?.balance || "0",
-                      )}
+                    : (() => {
+                        const vault =
+                          activeVault ??
+                          SUPPORTED_VAULTS.find((v) => v.symbol === selectedVault);
+                        const vaultBalance = getVaultBalance(selectedVault);
+                        if (!vault || !vaultBalance) return "0";
+                        const { underlying } = getVaultUnderlyingBalance(
+                          vaultBalance,
+                          vaultsData?.[vault.id],
+                          vault.decimals,
+                        );
+                        return formatBalance(underlying.toString());
+                      })()}
                 </span>
                 <span className="ml-1 truncate">
                   {currentAction === "deposit"
                     ? selectedToken?.symbol
-                    : activeVault.vaultSymbol}
+                    : activeVault?.symbol}
                 </span>
               </div>
             </div>
