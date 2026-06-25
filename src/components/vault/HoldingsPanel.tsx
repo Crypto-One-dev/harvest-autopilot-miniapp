@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { JSX } from "react";
+import BigNumber from "bignumber.js";
 import type { HarvestVaultData, TokenInfo, VaultInfo } from "~/types";
 import {
   formatBalance,
@@ -7,8 +8,12 @@ import {
   formatUsd,
 } from "~/utilities/parsers";
 import { displayDepositSymbol, getTokenIconPath } from "~/utilities/tokenIcons";
-import { getVaultUnderlyingBalance, getUnderlyingUsdPrice } from "~/utilities/vaultBalances";
-import { ChevronDownIcon } from "~/components/icons";
+import {
+  getVaultUnderlyingBalance,
+  getUnderlyingUsdPrice,
+} from "~/utilities/vaultBalances";
+import { useHoldingsTransaction } from "~/hooks/useHoldingsTransaction";
+import { ChevronDownIcon, LoadingSpinner } from "~/components/icons";
 
 export type HoldingsMode = "deposit" | "withdraw";
 
@@ -108,34 +113,44 @@ function YieldEstimate({
 
 interface HoldingsPanelProps {
   mode: HoldingsMode;
+  chainId: number;
   vault: VaultInfo;
   selectedToken: TokenInfo;
   depositAmount: string;
+  withdrawShareAmount: string;
   vaultBalance: TokenInfo | null;
   vaultsData?: Record<string, HarvestVaultData> | null;
   estimatedApy?: string | null;
+  walletAddress: string | null;
   isConnected: boolean;
   isConnecting: boolean;
   onTokenSelect: () => void;
   onAmountChange: (amount: string) => void;
   onMaxAmount: () => void;
-  onSubmit: () => void;
+  onConnect: () => void;
+  onNotify: (message: string, type?: "error" | "success") => void;
+  onSuccess: () => void | Promise<void>;
 }
 
 export default function HoldingsPanel({
   mode,
+  chainId,
   vault,
   selectedToken,
   depositAmount,
+  withdrawShareAmount,
   vaultBalance,
   vaultsData,
   estimatedApy,
+  walletAddress,
   isConnected,
   isConnecting,
   onTokenSelect,
   onAmountChange,
   onMaxAmount,
-  onSubmit,
+  onConnect,
+  onNotify,
+  onSuccess,
 }: HoldingsPanelProps): JSX.Element {
   const amount = parseFloat(depositAmount);
   const hasAmount = depositAmount !== "" && !Number.isNaN(amount) && amount > 0;
@@ -160,15 +175,38 @@ export default function HoldingsPanel({
 
   const availableSymbol = isDeposit ? tokenLabel : underlyingSymbol;
 
+  const { needsApproval, isBusy, handleAction } = useHoldingsTransaction({
+    mode,
+    chainId,
+    walletAddress,
+    vault,
+    selectedToken,
+    amount: depositAmount,
+    shareAmount: withdrawShareAmount,
+    isConnected,
+    onSuccess: async () => {
+      await onSuccess();
+      onNotify(
+        isDeposit ? "Deposit successful" : "Exit successful",
+        "success",
+      );
+    },
+    onError: (message) => onNotify(message, "error"),
+  });
+
+  const formattedAmount = formatCtaAmount(depositAmount);
+
   const buttonLabel = !hasAmount
     ? "Enter an amount"
     : !isConnected
-      ? isConnecting
-        ? "Connecting..."
-        : "Connect wallet"
-      : isDeposit
-        ? `Deposit ${formatCtaAmount(depositAmount)} ${tokenLabel}`.trim()
-        : `Exit ${formatCtaAmount(depositAmount)} ${underlyingSymbol}`.trim();
+      ? "Connect"
+      : needsApproval
+        ? `Approve ${formattedAmount} ${isDeposit ? tokenLabel : underlyingSymbol}`
+        : isDeposit
+          ? `Deposit ${formattedAmount} ${tokenLabel}`
+          : `Exit ${formattedAmount} ${underlyingSymbol}`;
+
+  const showCtaSpinner = hasAmount && (isBusy || isConnecting);
 
   const balanceUsd =
     !isDeposit && isConnected
@@ -176,6 +214,37 @@ export default function HoldingsPanel({
         ? `≈ ${formatUsd(underlyingPosition.usd)}`
         : ""
       : "";
+
+  const handleCtaClick = () => {
+    if (!hasAmount) return;
+    if (!isConnected) {
+      onConnect();
+      return;
+    }
+
+    if (isDeposit) {
+      const availableBalance = new BigNumber(selectedToken.rawBalance || "0").div(
+        new BigNumber(10).pow(selectedToken.decimals),
+      );
+      if (new BigNumber(depositAmount).gt(availableBalance)) {
+        onNotify(
+          `Insufficient ${tokenLabel} balance. Available: ${formatBalance(selectedToken.balance)}`,
+          "error",
+        );
+        return;
+      }
+    } else if (
+      new BigNumber(depositAmount).gt(underlyingPosition.underlying)
+    ) {
+      onNotify(
+        `Insufficient ${underlyingSymbol} balance. Available: ${formatBalance(underlyingPosition.underlying.toString())}`,
+        "error",
+      );
+      return;
+    }
+
+    void handleAction();
+  };
 
   return (
     <div className="panel">
@@ -269,10 +338,16 @@ export default function HoldingsPanel({
       <button
         type="button"
         className="cta-primary earn-cta"
-        disabled={!hasAmount || isConnecting}
-        onClick={onSubmit}
+        disabled={!hasAmount || isConnecting || isBusy}
+        onClick={handleCtaClick}
+        aria-busy={showCtaSpinner}
+        aria-label={showCtaSpinner ? buttonLabel : undefined}
       >
-        {buttonLabel}
+        {showCtaSpinner ? (
+          <LoadingSpinner size={22} className="cta-spinner" />
+        ) : (
+          buttonLabel
+        )}
       </button>
 
       {!isConnected && (

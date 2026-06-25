@@ -23,8 +23,10 @@ interface VaultDetailProps {
   activeTab: VaultTab;
   onTabChange: (tab: VaultTab) => void;
   onBack: () => void;
+  chainId: number;
   selectedToken: TokenInfo;
   depositAmount: string;
+  withdrawShareAmount: string;
   vaultBalance: TokenInfo | null;
   walletAddress: string | null;
   isConnected: boolean;
@@ -32,7 +34,9 @@ interface VaultDetailProps {
   onTokenSelect: () => void;
   onAmountChange: (amount: string) => void;
   onMaxAmount: () => void;
-  onSubmit: () => void;
+  onConnect: () => void;
+  onNotify: (message: string, type?: "error" | "success") => void;
+  onSuccess: () => void | Promise<void>;
 }
 
 const TABS: { id: VaultTab; label: string }[] = [
@@ -49,8 +53,10 @@ export default function VaultDetail({
   activeTab,
   onTabChange,
   onBack,
+  chainId,
   selectedToken,
   depositAmount,
+  withdrawShareAmount,
   vaultBalance,
   walletAddress,
   isConnected,
@@ -58,7 +64,9 @@ export default function VaultDetail({
   onTokenSelect,
   onAmountChange,
   onMaxAmount,
-  onSubmit,
+  onConnect,
+  onNotify,
+  onSuccess,
 }: VaultDetailProps): JSX.Element {
   const data = vaultsData?.[vault.id];
   const apy = data ? `${parseFloat(data.estimatedApy).toFixed(2)}%` : null;
@@ -158,35 +166,45 @@ export default function VaultDetail({
         {activeTab === "enter" && (
           <HoldingsPanel
             mode="deposit"
+            chainId={chainId}
             vault={vault}
             selectedToken={selectedToken}
             depositAmount={depositAmount}
+            withdrawShareAmount={withdrawShareAmount}
             vaultBalance={vaultBalance}
             vaultsData={vaultsData}
             estimatedApy={data?.estimatedApy ?? null}
+            walletAddress={walletAddress}
             isConnected={isConnected}
             isConnecting={isConnecting}
             onTokenSelect={onTokenSelect}
             onAmountChange={onAmountChange}
             onMaxAmount={onMaxAmount}
-            onSubmit={onSubmit}
+            onConnect={onConnect}
+            onNotify={onNotify}
+            onSuccess={onSuccess}
           />
         )}
 
         {activeTab === "exit" && (
           <HoldingsPanel
             mode="withdraw"
+            chainId={chainId}
             vault={vault}
             selectedToken={selectedToken}
             depositAmount={depositAmount}
+            withdrawShareAmount={withdrawShareAmount}
             vaultBalance={vaultBalance}
             vaultsData={vaultsData}
+            walletAddress={walletAddress}
             isConnected={isConnected}
             isConnecting={isConnecting}
             onTokenSelect={onTokenSelect}
             onAmountChange={onAmountChange}
             onMaxAmount={onMaxAmount}
-            onSubmit={onSubmit}
+            onConnect={onConnect}
+            onNotify={onNotify}
+            onSuccess={onSuccess}
           />
         )}
 

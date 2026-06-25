@@ -2,7 +2,6 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import Head from "next/head";
 import type { JSX } from "react";
 import BigNumber from "bignumber.js";
-import { Button } from "~/components/Button";
 import AppShell from "~/components/layout/AppShell";
 import VaultList from "~/components/home/VaultList";
 import VaultDetail from "~/components/vault/VaultDetail";
@@ -17,12 +16,11 @@ import {
 } from "wagmi";
 import ConvertTokenSelectModal from "./convert/TokenSelectModal";
 import RevertTokenSelectModal from "./revert/TokenSelectModal";
-import ConvertModal from "./convert/ConvertModal";
-import RevertModal from "./revert/RevertModal";
 import type { TokenInfo, VaultInfo, Token } from "~/types";
 import { usePortals } from "~/providers/Portals";
-import { formatBalance } from "~/utilities/parsers";
 import {
+  adjustVaultShareBalance,
+  adjustWalletTokenBalance,
   getSharePriceFromVaultData,
   getVaultUnderlyingBalance,
   underlyingToShares,
@@ -58,8 +56,6 @@ export default function App(): JSX.Element {
   const [vaultAddress, setVaultAddress] = useState<`0x${string}` | null>(null);
   const [isConvertTokenModalOpen, setIsConvertTokenModalOpen] = useState(false);
   const [isRevertTokenModalOpen, setIsRevertTokenModalOpen] = useState(false);
-  const [isConvertModalOpen, setIsConvertModalOpen] = useState(false);
-  const [isRevertModalOpen, setIsRevertModalOpen] = useState(false);
   const [tokenBalances, setTokenBalances] = useState<TokenInfo[]>([]);
   const { getPortalsBalances, SUPPORTED_TOKEN_LIST, getPortalsBaseTokens } =
     usePortals();
@@ -72,7 +68,6 @@ export default function App(): JSX.Element {
     type: "error" | "success";
   } | null>(null);
   const [activeVault, setActiveVault] = useState<VaultInfo | null>(null);
-  const [isAmountModalOpen, setIsAmountModalOpen] = useState(false);
   const [currentAction, setCurrentAction] = useState<"deposit" | "withdraw">(
     "deposit",
   );
@@ -117,11 +112,6 @@ export default function App(): JSX.Element {
     setVaultAddress(SUPPORTED_VAULTS[0].vaultAddress as `0x${string}`);
     setSelectedVault("USDC");
   }, []);
-
-  // Handle wallet interactions
-  const handleWalletInteraction = async (action: () => Promise<void>) => {
-    await action();
-  };
 
   // Switch to Base chain if needed
   useEffect(() => {
@@ -201,6 +191,9 @@ export default function App(): JSX.Element {
 
       try {
         const balances = await getPortalsBalances(walletAddress, chainId);
+        if (balances === null) {
+          return null;
+        }
 
         const defaultTokens = SUPPORTED_VAULTS.map((token) => ({
           ...token,
@@ -272,18 +265,7 @@ export default function App(): JSX.Element {
 
         return balances;
       } catch (error) {
-        console.error("Failed to fetch balances:", error);
-
-        const defaultTokens = SUPPORTED_VAULTS.map((token) => ({
-          ...token,
-          balance: "0",
-          balanceUSD: "0",
-          price: "0",
-        })) as TokenInfo[];
-
-        setTokenBalances(defaultTokens);
-        setVaultBalances({});
-        setSupportedTokens(defaultTokens);
+        console.warn("Failed to fetch balances:", error);
         return null;
       } finally {
         balanceFetchInFlight.current = false;
@@ -298,12 +280,79 @@ export default function App(): JSX.Element {
     ],
   );
 
-  const refreshBalancesWithRetry = useCallback(async () => {
-    const first = await fetchBalances(true);
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-    const second = await fetchBalances(true);
-    return second ?? first;
+  const refreshBalancesAfterTx = useCallback(async () => {
+    const retryDelaysMs = [3000, 5000, 8000, 12000];
+    let latest: Awaited<ReturnType<typeof fetchBalances>> = null;
+
+    for (const delayMs of retryDelaysMs) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      const balances = await fetchBalances(true);
+      if (balances !== null) {
+        latest = balances;
+      }
+    }
+
+    return latest;
   }, [fetchBalances]);
+
+  const replaceTokenInList = useCallback(
+    (list: TokenInfo[], updated: TokenInfo): TokenInfo[] => {
+      const address = updated.address?.toLowerCase();
+      if (!address) return list;
+
+      let found = false;
+      const next = list.map((token) => {
+        if (token.address?.toLowerCase() === address) {
+          found = true;
+          return updated;
+        }
+        return token;
+      });
+
+      return found ? next : [...next, updated];
+    },
+    [],
+  );
+
+  const applyOptimisticBalances = useCallback(
+    (txAmount: number, tab: VaultTab, token: TokenInfo) => {
+      const vault = activeVault;
+      if (!vault || !Number.isFinite(txAmount) || txAmount <= 0) return;
+
+      const vaultData = vaultsData?.[vault.id] ?? null;
+      const tokenDirection = tab === "exit" ? "add" : "remove";
+      const vaultDirection = tab === "exit" ? "remove" : "add";
+      const isSameAsset =
+        token.address?.toLowerCase() === vault.address.toLowerCase();
+
+      if (tab === "exit" || isSameAsset) {
+        setVaultBalances((prev) => {
+          const current = prev[vault.symbol];
+          if (!current) return prev;
+          return {
+            ...prev,
+            [vault.symbol]: adjustVaultShareBalance(
+              current,
+              vault,
+              vaultData,
+              txAmount,
+              vaultDirection,
+            ),
+          };
+        });
+      }
+
+      const updatedToken = adjustWalletTokenBalance(
+        token,
+        txAmount,
+        tokenDirection,
+      );
+      setSelectedToken(updatedToken);
+      setTokenBalances((tokens) => replaceTokenInList(tokens, updatedToken));
+      setSupportedTokens((tokens) => replaceTokenInList(tokens, updatedToken));
+    },
+    [activeVault, vaultsData, replaceTokenInList],
+  );
 
   useEffect(() => {
     if (!isWalletConnected || !pendingTokenSelectOpen) return;
@@ -323,56 +372,62 @@ export default function App(): JSX.Element {
     }
   }, [walletAddress, chainId, fetchBalances]);
 
-  // Update the success handlers
-  const handleConvertSuccess = async () => {
-    setIsConvertModalOpen(false);
-    setIsAmountModalOpen(false);
+  const handleDetailSuccess = useCallback(async () => {
+    const txAmount = parseFloat(depositAmount);
+    const tab = detailTab;
+
+    applyOptimisticBalances(txAmount, tab, selectedToken);
     setDepositAmount("");
-    const updatedBalances = await refreshBalancesWithRetry();
 
-    if (!updatedBalances || !selectedToken.address) return;
+    const updatedBalances = await refreshBalancesAfterTx();
 
-    const currentToken = updatedBalances.find(
-      (b) =>
-        b.address &&
-        b.address.toLowerCase() === selectedToken.address!.toLowerCase(),
-    );
+    if (!updatedBalances?.length || !selectedToken.address) return;
 
-    if (currentToken && Number(currentToken.balance) > 0) {
-      setSelectedToken(mapPortalsBalanceToTokenInfo(currentToken));
+    if (tab === "enter") {
+      const currentToken = updatedBalances.find(
+        (b) =>
+          b.address &&
+          b.address.toLowerCase() === selectedToken.address!.toLowerCase(),
+      );
+
+      if (currentToken) {
+        setSelectedToken(mapPortalsBalanceToTokenInfo(currentToken));
+        return;
+      }
+
+      const nextToken = updatedBalances.find(
+        (b) =>
+          b.address &&
+          Number(b.balance) > 0 &&
+          b.address.toLowerCase() !== vaultAddress?.toLowerCase(),
+      );
+
+      if (nextToken) {
+        setSelectedToken(mapPortalsBalanceToTokenInfo(nextToken));
+      }
       return;
     }
 
-    const nextToken = updatedBalances.find(
-      (b) =>
-        b.address &&
-        Number(b.balance) > 0 &&
-        b.address.toLowerCase() !== vaultAddress?.toLowerCase(),
-    );
+    if (tab === "exit") {
+      const receiveToken = updatedBalances.find(
+        (b) =>
+          b.address &&
+          b.address.toLowerCase() === selectedToken.address!.toLowerCase(),
+      );
 
-    if (nextToken) {
-      setSelectedToken(mapPortalsBalanceToTokenInfo(nextToken));
+      if (receiveToken) {
+        setSelectedToken(mapPortalsBalanceToTokenInfo(receiveToken));
+      }
     }
-  };
-
-  const handleRevertSuccess = async () => {
-    setIsRevertModalOpen(false);
-    setIsAmountModalOpen(false);
-    setDepositAmount("");
-    const updatedBalances = await refreshBalancesWithRetry();
-
-    if (!updatedBalances || !selectedToken.address) return;
-
-    const receiveToken = updatedBalances.find(
-      (b) =>
-        b.address &&
-        b.address.toLowerCase() === selectedToken.address!.toLowerCase(),
-    );
-
-    if (receiveToken) {
-      setSelectedToken(mapPortalsBalanceToTokenInfo(receiveToken));
-    }
-  };
+  }, [
+    depositAmount,
+    detailTab,
+    applyOptimisticBalances,
+    refreshBalancesAfterTx,
+    selectedToken,
+    vaultAddress,
+    mapPortalsBalanceToTokenInfo,
+  ]);
 
   useEffect(() => {
     if (!isWalletConnected || !selectedToken.address) return;
@@ -601,117 +656,6 @@ export default function App(): JSX.Element {
     }
   };
 
-  // Handle amount confirmation
-  const handleAmountConfirm = () => {
-    // Validate amount before proceeding
-    if (!depositAmount || parseFloat(depositAmount) <= 0) {
-      showNotification("Please enter a valid amount", "error");
-      return;
-    }
-
-    // For deposit flow
-    if (currentAction === "deposit") {
-      // Check if user has enough balance
-      if (selectedToken) {
-        const availableBalance = new BigNumber(selectedToken.rawBalance).div(
-          new BigNumber(10).pow(selectedToken.decimals),
-        );
-
-        if (new BigNumber(depositAmount).gt(availableBalance)) {
-          showNotification(
-            `Insufficient ${selectedToken.symbol} balance. Available: ${formatBalance(selectedToken.balance)}`,
-            "error",
-          );
-          return;
-        }
-      }
-
-      // Open deposit modal directly
-      setIsAmountModalOpen(false);
-      setIsConvertModalOpen(true);
-    }
-    // For withdraw flow
-    else if (currentAction === "withdraw") {
-      const vaultBalance = getVaultBalance(selectedVault);
-      const vault =
-        activeVault ?? SUPPORTED_VAULTS.find((v) => v.symbol === selectedVault);
-      if (vaultBalance && vault) {
-        const { underlying } = getVaultUnderlyingBalance(
-          vaultBalance,
-          vaultsData?.[vault.id],
-          vault.decimals,
-        );
-
-        if (new BigNumber(depositAmount).gt(underlying)) {
-          showNotification(
-            `Insufficient ${vault.symbol} balance. Available: ${formatBalance(underlying.toString())}`,
-            "error",
-          );
-          return;
-        }
-      }
-
-      // Open withdraw modal directly
-      setIsAmountModalOpen(false);
-      setIsRevertModalOpen(true);
-    }
-  };
-
-  const handleHoldingsSubmit = () => {
-    if (!isWalletConnected) {
-      handleConnectWallet();
-      return;
-    }
-
-    if (!depositAmount || parseFloat(depositAmount) <= 0) {
-      showNotification("Please enter a valid amount", "error");
-      return;
-    }
-
-    if (currentAction === "deposit") {
-      if (selectedToken) {
-        const availableBalance = new BigNumber(selectedToken.rawBalance).div(
-          new BigNumber(10).pow(selectedToken.decimals),
-        );
-
-        if (new BigNumber(depositAmount).gt(availableBalance)) {
-          showNotification(
-            `Insufficient ${selectedToken.symbol} balance. Available: ${formatBalance(selectedToken.balance)}`,
-            "error",
-          );
-          return;
-        }
-      }
-
-      setIsConvertModalOpen(true);
-      return;
-    }
-
-    const vaultBalance = getVaultBalance(selectedVault);
-    const vault =
-      activeVault ?? SUPPORTED_VAULTS.find((v) => v.symbol === selectedVault);
-    if (vaultBalance && vault) {
-      const { underlying } = getVaultUnderlyingBalance(
-        vaultBalance,
-        vaultsData?.[vault.id],
-        vault.decimals,
-      );
-
-      if (new BigNumber(depositAmount).gt(underlying)) {
-        showNotification(
-          `Insufficient ${vault.symbol} balance. Available: ${formatBalance(underlying.toString())}`,
-          "error",
-        );
-        return;
-      }
-    } else {
-      showNotification("You don't have a vault balance to withdraw", "error");
-      return;
-    }
-
-    setIsRevertModalOpen(true);
-  };
-
   const handleConnectWallet = () => {
     const connector: Connector | undefined =
       connectors.find((c: Connector) => c.id === "baseAccount") ??
@@ -763,8 +707,13 @@ export default function App(): JSX.Element {
               activeTab={detailTab}
               onTabChange={handleDetailTabChange}
               onBack={() => setView("home")}
+              chainId={chainId}
               selectedToken={selectedToken}
               depositAmount={depositAmount}
+              withdrawShareAmount={toWithdrawShareAmount(
+                depositAmount,
+                activeVault,
+              )}
               vaultBalance={getVaultBalance(activeVault.symbol)}
               walletAddress={walletAddress}
               isConnected={isWalletConnected}
@@ -772,7 +721,9 @@ export default function App(): JSX.Element {
               onTokenSelect={handleTokenSelect}
               onAmountChange={setDepositAmount}
               onMaxAmount={handleMaxAmount}
-              onSubmit={handleHoldingsSubmit}
+              onConnect={handleConnectWallet}
+              onNotify={showNotification}
+              onSuccess={handleDetailSuccess}
             />
           )
         )}
@@ -809,182 +760,6 @@ export default function App(): JSX.Element {
           />
         )}
 
-      {isConvertModalOpen && (
-        <ConvertModal
-          chainId={chainId}
-          isOpen={isConvertModalOpen}
-          onClose={() => setIsConvertModalOpen(false)}
-          selectedToken={selectedToken}
-          depositAmount={depositAmount}
-          vaultAddress={vaultAddress}
-          onSuccess={handleConvertSuccess}
-          walletAddress={walletAddress}
-          handleWalletInteraction={handleWalletInteraction}
-        />
-      )}
-
-      {isRevertModalOpen && activeVault && (
-        <RevertModal
-          chainId={chainId}
-          isOpen={isRevertModalOpen}
-          onClose={() => setIsRevertModalOpen(false)}
-          selectedToken={selectedToken}
-          withdrawAmount={toWithdrawShareAmount(depositAmount, activeVault)}
-          selectedVault={activeVault}
-          onSuccess={handleRevertSuccess}
-          walletAddress={walletAddress}
-          handleWalletInteraction={handleWalletInteraction}
-        />
-      )}
-
-      {/* Amount Input Modal */}
-      {isAmountModalOpen && activeVault && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-          <div
-            className="absolute inset-0 bg-black/50"
-            onClick={() => setIsAmountModalOpen(false)}
-          />
-          <div className="relative bg-white dark:bg-gray-800 rounded-lg p-5 w-full max-w-md">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold flex items-center">
-                <span className="mr-1">
-                  {currentAction === "deposit" ? "Deposit" : "Withdraw as"}
-                </span>
-                <span className="truncate max-w-[150px]">
-                  {currentAction === "deposit"
-                    ? selectedToken.symbol
-                    : selectedToken.symbol}
-                </span>
-              </h2>
-              <button
-                onClick={() => setIsAmountModalOpen(false)}
-                className="text-gray-500 hover:text-gray-700"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Token and Vault Info */}
-            <div className="flex items-center justify-between mb-4 bg-gray-50 dark:bg-gray-700 p-3 rounded-lg">
-              <div className="flex items-center gap-2 max-w-[45%]">
-                <img
-                  src={selectedToken.icon}
-                  alt={selectedToken.symbol}
-                  className="w-6 h-6 rounded-full object-cover"
-                />
-                <span className="font-medium truncate">
-                  {selectedToken.symbol}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                {currentAction === "deposit" && (
-                  <>
-                    <span className="text-gray-500">→</span>
-                    <div className="flex items-center gap-2 max-w-[45%]">
-                      <img
-                        src={activeVault.icon}
-                        alt={activeVault.vaultSymbol}
-                        className="w-6 h-6 rounded-full object-cover"
-                      />
-                      <span className="font-medium truncate">
-                        {activeVault.vaultSymbol}
-                      </span>
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* Amount Input */}
-            <div className="mb-5">
-              <div className="relative mb-2">
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={depositAmount}
-                  onChange={(e) => {
-                    const value = e.target.value
-                      .replace(/[^0-9.]/g, "")
-                      .replace(/(\..*)\./g, "$1");
-                    if (value === "" || /^\d*\.?\d*$/.test(value)) {
-                      setDepositAmount(value);
-                    }
-                  }}
-                  placeholder="0.0"
-                  className="w-full p-4 pr-24 text-lg border rounded-lg bg-white dark:bg-gray-700 dark:border-gray-600"
-                />
-                <div className="absolute right-3 top-1/2 transform -translate-y-1/2 flex items-center">
-                  <button
-                    onClick={() => {
-                      // Set max amount based on the current action
-                      if (currentAction === "deposit" && selectedToken) {
-                        const balance = new BigNumber(
-                          selectedToken.rawBalance || "0",
-                        )
-                          .div(new BigNumber(10).pow(selectedToken.decimals))
-                          .toString();
-                        setDepositAmount(balance);
-                      } else if (currentAction === "withdraw") {
-                        const vaultBalance = getVaultBalance(selectedVault);
-                        const vault =
-                          activeVault ??
-                          SUPPORTED_VAULTS.find((v) => v.symbol === selectedVault);
-                        if (vaultBalance && vault) {
-                          const { underlying } = getVaultUnderlyingBalance(
-                            vaultBalance,
-                            vaultsData?.[vault.id],
-                            vault.decimals,
-                          );
-                          setDepositAmount(underlying.toString());
-                        }
-                      }
-                    }}
-                    className="text-sm text-purple-600 font-medium px-2 py-1 hover:bg-purple-50 dark:hover:bg-gray-600 rounded"
-                  >
-                    MAX
-                  </button>
-                </div>
-              </div>
-
-              {/* Available Balance */}
-              <div className="text-sm text-gray-500 dark:text-gray-400 flex items-center">
-                <span className="mr-1">Available:</span>
-                <span className="font-medium">
-                  {currentAction === "deposit"
-                    ? formatBalance(selectedToken?.balance || "0")
-                    : (() => {
-                        const vault =
-                          activeVault ??
-                          SUPPORTED_VAULTS.find((v) => v.symbol === selectedVault);
-                        const vaultBalance = getVaultBalance(selectedVault);
-                        if (!vault || !vaultBalance) return "0";
-                        const { underlying } = getVaultUnderlyingBalance(
-                          vaultBalance,
-                          vaultsData?.[vault.id],
-                          vault.decimals,
-                        );
-                        return formatBalance(underlying.toString());
-                      })()}
-                </span>
-                <span className="ml-1 truncate">
-                  {currentAction === "deposit"
-                    ? selectedToken?.symbol
-                    : activeVault?.symbol}
-                </span>
-              </div>
-            </div>
-
-            {/* Confirm Button */}
-            <Button
-              onClick={handleAmountConfirm}
-              disabled={!depositAmount || parseFloat(depositAmount) <= 0}
-              className="w-full"
-            >
-              {currentAction === "deposit" ? "Deposit" : "Withdraw"}
-            </Button>
-          </div>
-        </div>
-      )}
     </>
   );
 }

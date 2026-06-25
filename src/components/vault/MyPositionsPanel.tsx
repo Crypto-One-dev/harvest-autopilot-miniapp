@@ -14,6 +14,7 @@ import {
   getIPORVaultHistories,
 } from "~/utilities/chartApiCalls";
 import PositionBalanceChart from "./PositionBalanceChart";
+import { LoadingSpinner } from "~/components/icons";
 
 interface MyPositionsPanelProps {
   vault: VaultInfo;
@@ -346,7 +347,13 @@ export default function MyPositionsPanel({
             <span className="position-label">Total earned</span>
             {earnedAmount === null ? (
               <>
-                <span className="position-value is-earn">—</span>
+                <span className="position-value is-earn">
+                  {historyLoading ? (
+                    <LoadingSpinner size={18} className="position-earn-spinner" />
+                  ) : (
+                    "—"
+                  )}
+                </span>
                 <span className="position-usd">
                   {historyLoading ? "Loading earnings…" : "Need more history"}
                 </span>
