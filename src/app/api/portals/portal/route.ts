@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      timeout: 15000,
+      timeout: 30000,
     });
 
     return NextResponse.json(response.data);

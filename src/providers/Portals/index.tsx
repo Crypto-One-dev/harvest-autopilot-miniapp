@@ -6,7 +6,10 @@ interface PortalsContextType {
   SUPPORTED_TOKEN_LIST: Record<number, Record<string, string>>;
   /* eslint-disable @typescript-eslint/no-explicit-any */
   getPortalsBaseTokens: (chainId: number) => Promise<any[]>;
-  getPortalsBalances: (address: string, chainId: number) => Promise<any[]>;
+  getPortalsBalances: (
+    address: string,
+    chainId: number,
+  ) => Promise<any[] | null>;
   getPortalsSupport: (chainId: number, tokenAddress: string) => Promise<any>;
   getPortalsToken: (chainId: number, tokenAddress: string) => Promise<any>;
   getPortalsApproval: (
@@ -35,6 +38,7 @@ interface PortalsParams {
   inputAmount: string;
   tokenOut: string;
   slippage?: number | null;
+  validate?: boolean;
 }
 
 interface PortalsEstimateParams {
@@ -87,18 +91,22 @@ export function PortalsProvider({ children }: PortalsProviderProps) {
           owner: address,
           networks: network,
         },
-        timeout: 10000,
+        timeout: 20000,
       });
 
       if (!response.data || !response.data.balances) {
-        console.error("Invalid response format:", response.data);
-        return [];
+        console.warn("Invalid Portals balance response:", response.data);
+        return null;
       }
 
       return response.data.balances;
     } catch (error) {
-      console.error("Error fetching balances:", error);
-      return [];
+      if (axios.isAxiosError(error) && error.code === "ECONNABORTED") {
+        console.warn("Portals balance sync timed out, will retry later");
+      } else {
+        console.warn("Error fetching balances:", error);
+      }
+      return null;
     }
   };
 
@@ -228,23 +236,30 @@ export function PortalsProvider({ children }: PortalsProviderProps) {
     inputAmount,
     tokenOut,
     slippage,
+    validate,
   }: PortalsParams) => {
     try {
       const inputToken = `${getChainNamePortals(chainId)}:${tokenIn}`;
       const outputToken = `${getChainNamePortals(chainId)}:${tokenOut}`;
-      const validate = slippage === null;
+      const shouldValidate = validate ?? slippage === null;
+
+      const params: Record<string, string | number | boolean> = {
+        sender,
+        inputToken,
+        inputAmount,
+        outputToken,
+        feePercentage: 0,
+        partner: "0xF066789028fE31D4f53B69B81b328B8218Cc0641",
+        validate: shouldValidate,
+      };
+
+      if (slippage != null) {
+        params.slippageTolerancePercentage = slippage;
+      }
+
       const response = await axios.get("/api/portals/portal", {
-        params: {
-          sender,
-          inputToken,
-          inputAmount,
-          outputToken,
-          slippageTolerancePercentage: slippage,
-          feePercentage: 0,
-          partner: "0xF066789028fE31D4f53B69B81b328B8218Cc0641",
-          validate,
-        },
-        timeout: 15000,
+        params,
+        timeout: 30000,
       });
       return response.data;
     } catch (error) {

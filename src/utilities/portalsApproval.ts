@@ -50,9 +50,13 @@ export async function waitForPortalsApproval(
 
 export async function getPortalsWithRetry<T>(
   fetchPortal: () => Promise<T>,
-  options: { attempts?: number; intervalMs?: number } = {},
+  options: {
+    attempts?: number;
+    intervalMs?: number;
+    onTransferFromFailed?: () => Promise<void>;
+  } = {},
 ): Promise<T> {
-  const { attempts = 8, intervalMs = 2500 } = options;
+  const { attempts = 8, intervalMs = 2500, onTransferFromFailed } = options;
   let lastError: unknown;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -63,6 +67,11 @@ export async function getPortalsWithRetry<T>(
       if (!isTransferFromFailed(error) || attempt === attempts - 1) {
         throw error;
       }
+
+      if (onTransferFromFailed) {
+        await onTransferFromFailed();
+      }
+
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
     }
   }

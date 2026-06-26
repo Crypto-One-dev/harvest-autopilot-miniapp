@@ -456,6 +456,11 @@ button {
   font-size: 15px;
 }
 
+.cta-primary .cta-spinner {
+  border-color: rgba(26, 26, 26, 0.2);
+  border-top-color: var(--ink);
+}
+
 .back-link {
   font-family: var(--sans);
   color: var(--ink-2);
@@ -1128,6 +1133,13 @@ button {
 
 .position-value.is-earn {
   color: #1f7c4d;
+}
+
+.position-value.is-earn .position-earn-spinner {
+  border-color: rgba(31, 124, 77, 0.2);
+  border-top-color: #1f7c4d;
+  display: inline-block;
+  vertical-align: middle;
 }
 
 .position-usd {
