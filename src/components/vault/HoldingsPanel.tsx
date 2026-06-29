@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import type { JSX } from "react";
 import BigNumber from "bignumber.js";
 import type { HarvestVaultData, TokenInfo, VaultInfo } from "~/types";
@@ -6,12 +6,18 @@ import {
   formatBalance,
   formatCtaAmount,
   formatUsd,
+  parseTokenUnits,
+  formatTokenUnitsForDisplay,
 } from "~/utilities/parsers";
 import { displayDepositSymbol, getTokenIconPath } from "~/utilities/tokenIcons";
+import { isNativeEthToken } from "~/utilities/portalsTokens";
 import {
   getVaultUnderlyingBalance,
   getUnderlyingUsdPrice,
+  getSharePriceFromVaultData,
+  underlyingFromShareUnits,
 } from "~/utilities/vaultBalances";
+import { getOnchainTokenBalance } from "~/utilities/onchainBalance";
 import { useHoldingsTransaction } from "~/hooks/useHoldingsTransaction";
 import { ChevronDownIcon, LoadingSpinner } from "~/components/icons";
 
@@ -118,6 +124,7 @@ interface HoldingsPanelProps {
   selectedToken: TokenInfo;
   depositAmount: string;
   withdrawShareAmount: string;
+  amountRawUnits?: string | null;
   vaultBalance: TokenInfo | null;
   vaultsData?: Record<string, HarvestVaultData> | null;
   estimatedApy?: string | null;
@@ -130,6 +137,8 @@ interface HoldingsPanelProps {
   onConnect: () => void;
   onNotify: (message: string, type?: "error" | "success") => void;
   onSuccess: () => void | Promise<void>;
+  onRefreshBalances?: () => void | Promise<void>;
+  onSyncAmountToLiveMax?: (raw: string, display: string) => void;
 }
 
 export default function HoldingsPanel({
@@ -139,6 +148,7 @@ export default function HoldingsPanel({
   selectedToken,
   depositAmount,
   withdrawShareAmount,
+  amountRawUnits = null,
   vaultBalance,
   vaultsData,
   estimatedApy,
@@ -151,6 +161,8 @@ export default function HoldingsPanel({
   onConnect,
   onNotify,
   onSuccess,
+  onRefreshBalances,
+  onSyncAmountToLiveMax,
 }: HoldingsPanelProps): JSX.Element {
   const amount = parseFloat(depositAmount);
   const hasAmount = depositAmount !== "" && !Number.isNaN(amount) && amount > 0;
@@ -163,14 +175,114 @@ export default function HoldingsPanel({
   const apy = estimatedApy ? parseFloat(estimatedApy) : 0;
   const tokenUsdPrice =
     parseFloat(selectedToken.price || "0") || getUnderlyingUsdPrice(vaultData);
-  const underlyingPosition = useMemo(
+  const cachedUnderlyingPosition = useMemo(
     () =>
-      getVaultUnderlyingBalance(vaultBalance, vaultData, vault.decimals),
-    [vaultBalance, vaultData, vault.decimals],
+      getVaultUnderlyingBalance(
+        vaultBalance,
+        vaultData,
+        vault.decimals,
+        vault.vaultDecimals,
+      ),
+    [vaultBalance, vaultData, vault.decimals, vault.vaultDecimals],
   );
 
+  const [liveExitPosition, setLiveExitPosition] = useState<{
+    underlying: number;
+    usd: number;
+  } | null>(null);
+
+  const [liveDepositBalance, setLiveDepositBalance] = useState<{
+    raw: string;
+    display: string;
+  } | null>(null);
+
+  const refreshLiveDepositBalance = useCallback(async () => {
+    if (
+      !isDeposit ||
+      !isConnected ||
+      !walletAddress ||
+      !selectedToken.address ||
+      isNativeEthToken(selectedToken)
+    ) {
+      setLiveDepositBalance(null);
+      return;
+    }
+
+    try {
+      const onchainUnits = await getOnchainTokenBalance({
+        token: selectedToken.address,
+        owner: walletAddress as `0x${string}`,
+        chainId,
+      });
+      setLiveDepositBalance({
+        raw: onchainUnits.toString(),
+        display: formatTokenUnitsForDisplay(
+          onchainUnits,
+          selectedToken.decimals,
+        ),
+      });
+    } catch (error) {
+      console.warn("Failed to read on-chain deposit balance:", error);
+      setLiveDepositBalance(null);
+    }
+  }, [isDeposit, isConnected, walletAddress, selectedToken, chainId]);
+
+  useEffect(() => {
+    void refreshLiveDepositBalance();
+  }, [refreshLiveDepositBalance, selectedToken.rawBalance]);
+
+  const refreshLiveExitPosition = useCallback(async () => {
+    if (
+      isDeposit ||
+      !isConnected ||
+      !walletAddress ||
+      !vault.vaultAddress
+    ) {
+      setLiveExitPosition(null);
+      return;
+    }
+
+    try {
+      const shareUnits = await getOnchainTokenBalance({
+        token: vault.vaultAddress,
+        owner: walletAddress as `0x${string}`,
+        chainId,
+      });
+      const sharePrice = getSharePriceFromVaultData(vaultData, vault.decimals);
+      const underlyingUsdPrice = getUnderlyingUsdPrice(vaultData);
+      const underlying = underlyingFromShareUnits(
+        shareUnits,
+        vault.vaultDecimals,
+        sharePrice,
+      );
+      setLiveExitPosition({
+        underlying,
+        usd: underlying * underlyingUsdPrice,
+      });
+    } catch (error) {
+      console.warn("Failed to read on-chain vault balance:", error);
+      setLiveExitPosition(null);
+    }
+  }, [
+    isDeposit,
+    isConnected,
+    walletAddress,
+    vault.vaultAddress,
+    vault.vaultDecimals,
+    vault.decimals,
+    chainId,
+    vaultData,
+  ]);
+
+  useEffect(() => {
+    void refreshLiveExitPosition();
+  }, [refreshLiveExitPosition, vaultBalance?.rawBalance]);
+
+  const underlyingPosition =
+    !isDeposit && liveExitPosition ? liveExitPosition : cachedUnderlyingPosition;
+
   const availableBalance = isDeposit
-    ? selectedToken.balance
+    ? (liveDepositBalance?.display ?? selectedToken.balance)
     : underlyingPosition.underlying.toString();
 
   const availableSymbol = isDeposit ? tokenLabel : underlyingSymbol;
@@ -183,6 +295,7 @@ export default function HoldingsPanel({
     selectedToken,
     amount: depositAmount,
     shareAmount: withdrawShareAmount,
+    amountRawUnits,
     isConnected,
     onSuccess: async () => {
       await onSuccess();
@@ -192,7 +305,31 @@ export default function HoldingsPanel({
       );
     },
     onError: (message) => onNotify(message, "error"),
+    onRefreshBalances,
   });
+
+  useEffect(() => {
+    if (!isDeposit || !liveDepositBalance || !depositAmount || isBusy) return;
+
+    const requestedRaw = amountRawUnits
+      ? amountRawUnits
+      : parseTokenUnits(depositAmount, selectedToken.decimals).toString();
+
+    if (new BigNumber(requestedRaw).gt(liveDepositBalance.raw)) {
+      onSyncAmountToLiveMax?.(
+        liveDepositBalance.raw,
+        liveDepositBalance.display,
+      );
+    }
+  }, [
+    isDeposit,
+    liveDepositBalance,
+    depositAmount,
+    amountRawUnits,
+    selectedToken.decimals,
+    onSyncAmountToLiveMax,
+    isBusy,
+  ]);
 
   const formattedAmount = formatCtaAmount(depositAmount);
 
@@ -222,25 +359,29 @@ export default function HoldingsPanel({
       return;
     }
 
-    if (isDeposit) {
-      const availableBalance = new BigNumber(selectedToken.rawBalance || "0").div(
-        new BigNumber(10).pow(selectedToken.decimals),
+    if (isDeposit && !amountRawUnits) {
+      const availableRaw = new BigNumber(
+        liveDepositBalance?.raw ?? selectedToken.rawBalance ?? "0",
       );
-      if (new BigNumber(depositAmount).gt(availableBalance)) {
+      const requestedRaw = new BigNumber(
+        parseTokenUnits(depositAmount, selectedToken.decimals).toString(),
+      );
+      if (requestedRaw.gt(availableRaw)) {
         onNotify(
-          `Insufficient ${tokenLabel} balance. Available: ${formatBalance(selectedToken.balance)}`,
+          `Insufficient ${tokenLabel} balance. Available: ${formatBalance(availableBalance)}`,
           "error",
         );
         return;
       }
-    } else if (
-      new BigNumber(depositAmount).gt(underlyingPosition.underlying)
-    ) {
-      onNotify(
-        `Insufficient ${underlyingSymbol} balance. Available: ${formatBalance(underlyingPosition.underlying.toString())}`,
-        "error",
-      );
-      return;
+    } else if (!amountRawUnits) {
+      const maxDisplay = formatBalance(underlyingPosition.underlying);
+      if (new BigNumber(depositAmount).gt(maxDisplay)) {
+        onNotify(
+          `Insufficient ${underlyingSymbol} balance. Available: ${maxDisplay}`,
+          "error",
+        );
+        return;
+      }
     }
 
     void handleAction();

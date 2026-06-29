@@ -4,7 +4,7 @@ import BigNumber from "bignumber.js";
 import { useSendTransaction, useWaitForTransactionReceipt } from "wagmi";
 import type { HoldingsMode } from "~/components/vault/HoldingsPanel";
 import { usePortals } from "~/providers/Portals";
-import { parseTokenUnits } from "~/utilities/parsers";
+import { parseTokenUnits, formatTokenUnits, formatBalance } from "~/utilities/parsers";
 import { isNativeEthToken } from "~/utilities/portalsTokens";
 import {
   getPortalsWithRetry,
@@ -16,7 +16,8 @@ import {
   decodeApprovalSpender,
   isOnchainAllowanceSufficient,
 } from "~/utilities/onchainAllowance";
-import { parseWalletError } from "~/utilities/walletErrors";
+import { getOnchainTokenBalance } from "~/utilities/onchainBalance";
+import { parseWalletError, isUserRejection } from "~/utilities/walletErrors";
 import type { TokenInfo, VaultInfo } from "~/types";
 
 type ActiveTx = {
@@ -44,7 +45,7 @@ function notifyTxError(
   error: unknown,
   action: "approve" | "deposit" | "exit",
   onError: (message: string) => void,
-  options: { isCrossAsset?: boolean } = {},
+  options: { isCrossAsset?: boolean; insufficientOnchainBalance?: boolean } = {},
 ): void {
   const message = parseWalletError(error, action, options);
   if (message) {
@@ -60,9 +61,12 @@ interface UseHoldingsTransactionParams {
   selectedToken: TokenInfo;
   amount: string;
   shareAmount: string;
+  /** Exact base units when MAX was used; bypasses display rounding for txs. */
+  amountRawUnits?: string | null;
   isConnected: boolean;
   onSuccess: () => void | Promise<void>;
   onError: (message: string) => void;
+  onRefreshBalances?: () => void | Promise<void>;
 }
 
 export function useHoldingsTransaction({
@@ -73,9 +77,11 @@ export function useHoldingsTransaction({
   selectedToken,
   amount,
   shareAmount,
+  amountRawUnits = null,
   isConnected,
   onSuccess,
   onError,
+  onRefreshBalances,
 }: UseHoldingsTransactionParams) {
   const isDeposit = mode === "deposit";
   const [activeTx, setActiveTx] = useState<ActiveTx | null>(null);
@@ -96,14 +102,16 @@ export function useHoldingsTransaction({
     });
 
   const getDepositUnits = useCallback((): string => {
+    if (amountRawUnits) return amountRawUnits;
     const safeAmount = new BigNumber(amount || "0").toString();
     return parseTokenUnits(safeAmount, selectedToken.decimals).toString();
-  }, [amount, selectedToken.decimals]);
+  }, [amountRawUnits, amount, selectedToken.decimals]);
 
   const getWithdrawUnits = useCallback((): string => {
+    if (amountRawUnits) return amountRawUnits;
     const safeAmount = new BigNumber(shareAmount || "0").toString();
     return parseTokenUnits(safeAmount, vault.vaultDecimals).toString();
-  }, [shareAmount, vault.vaultDecimals]);
+  }, [amountRawUnits, shareAmount, vault.vaultDecimals]);
 
   const getApprovalTokenAddress = useCallback((): `0x${string}` | undefined => {
     return isDeposit ? selectedToken.address : vault.vaultAddress;
@@ -112,6 +120,89 @@ export function useHoldingsTransaction({
   const getRequiredUnits = useCallback((): string => {
     return isDeposit ? getDepositUnits() : getWithdrawUnits();
   }, [isDeposit, getDepositUnits, getWithdrawUnits]);
+
+  /** Caps requested units to live on-chain balance so stale UI amounts cannot over-deposit. */
+  const capUnitsToOnchainBalance = useCallback(
+    async (requestedUnits: string): Promise<string> => {
+      const tokenAddress = isDeposit
+        ? selectedToken.address
+        : vault.vaultAddress;
+      if (!walletAddress || !tokenAddress) return requestedUnits;
+
+      try {
+        const onchain = await getOnchainTokenBalance({
+          token: tokenAddress,
+          owner: walletAddress as `0x${string}`,
+          chainId,
+        });
+        const onchainStr = onchain.toString();
+        return new BigNumber(requestedUnits).gt(onchainStr)
+          ? onchainStr
+          : requestedUnits;
+      } catch (error) {
+        console.warn("Failed to read on-chain balance for cap:", error);
+        return requestedUnits;
+      }
+    },
+    [
+      isDeposit,
+      selectedToken.address,
+      vault.vaultAddress,
+      walletAddress,
+      chainId,
+    ],
+  );
+
+  const getResolvedRequiredUnits = useCallback(async (): Promise<string> => {
+    return capUnitsToOnchainBalance(getRequiredUnits());
+  }, [capUnitsToOnchainBalance, getRequiredUnits]);
+
+  const getDepositBalanceError = useCallback(
+    async (tokenLabel: string): Promise<string | null> => {
+      const tokenAddress = isDeposit ? selectedToken.address : vault.vaultAddress;
+      if (!walletAddress || !tokenAddress) return null;
+
+      const requiredUnits = await getResolvedRequiredUnits();
+      if (new BigNumber(requiredUnits).lte(0)) return null;
+
+      try {
+        const onchainUnits = await getOnchainTokenBalance({
+          token: tokenAddress,
+          owner: walletAddress as `0x${string}`,
+          chainId,
+        });
+
+        if (new BigNumber(onchainUnits.toString()).gte(requiredUnits)) {
+          return null;
+        }
+
+        const decimals = isDeposit ? selectedToken.decimals : vault.vaultDecimals;
+        const available = formatBalance(
+          formatTokenUnits(onchainUnits.toString(), decimals),
+        );
+        const requested = formatBalance(
+          formatTokenUnits(requiredUnits, decimals),
+        );
+
+        return isDeposit
+          ? `Your on-chain ${tokenLabel} balance is ${available}, but you're trying to deposit ${requested}. Tap MAX again or enter a lower amount.`
+          : `Your on-chain vault balance is ${available}, but you're trying to exit ${requested}. Tap MAX again or enter a lower amount.`;
+      } catch (error) {
+        console.warn("Failed to verify on-chain balance:", error);
+        return null;
+      }
+    },
+    [
+      isDeposit,
+      selectedToken.address,
+      selectedToken.decimals,
+      vault.vaultAddress,
+      vault.vaultDecimals,
+      walletAddress,
+      chainId,
+      getResolvedRequiredUnits,
+    ],
+  );
 
   const fetchApprovalContext =
     useCallback(async (): Promise<PortalsApprovalContext | null> => {
@@ -237,7 +328,10 @@ export function useHoldingsTransaction({
   );
 
   useEffect(() => {
-    if (!isConnected || !walletAddress || !amount || parseFloat(amount) <= 0) {
+    if (!isConnected || !walletAddress) return;
+
+    if (!amount || parseFloat(amount) <= 0) {
+      if (isWaitingForApproval || isSubmitting) return;
       setNeedsApproval(true);
       setIsApprovalReady(false);
       setIsWaitingForApproval(false);
@@ -266,11 +360,13 @@ export function useHoldingsTransaction({
     walletAddress,
     amount,
     shareAmount,
+    amountRawUnits,
     selectedToken.address,
     vault.vaultAddress,
     mode,
     checkApproval,
     isWaitingForApproval,
+    isSubmitting,
   ]);
 
   useEffect(() => {
@@ -300,7 +396,9 @@ export function useHoldingsTransaction({
         setNeedsApproval(!ready);
         setIsApprovalReady(ready);
 
-        if (!ready) {
+        if (ready) {
+          void onRefreshBalances?.();
+        } else {
           onError(
             "Approval is still pending. Wait for confirmation on Base, then try again.",
           );
@@ -345,6 +443,7 @@ export function useHoldingsTransaction({
     chainId,
     walletAddress,
     onSuccess,
+    onRefreshBalances,
   ]);
 
   const runApprove = useCallback(async () => {
@@ -361,7 +460,13 @@ export function useHoldingsTransaction({
       setIsSubmitting(true);
       setIsWaitingForApproval(true);
       setIsApprovalReady(false);
-      const value = getRequiredUnits();
+
+      const value = await getResolvedRequiredUnits();
+      if (new BigNumber(value).lte(0)) {
+        onError("Insufficient balance.");
+        setIsWaitingForApproval(false);
+        return;
+      }
       const approvalData = await portalsApprove(
         chainId,
         walletAddress as `0x${string}`,
@@ -391,25 +496,16 @@ export function useHoldingsTransaction({
         setActiveTx({ hash, kind: "approve" });
       }
     } catch (error) {
-      console.error("Approval error:", error);
-      notifyTxError(error, "approve", onError);
+      if (!isUserRejection(error)) {
+        console.error("Approval error:", error);
+        notifyTxError(error, "approve", onError);
+      }
       setIsApprovalReady(false);
       setIsWaitingForApproval(false);
     } finally {
       setIsSubmitting(false);
     }
-  }, [
-    getApprovalTokenAddress,
-    walletAddress,
-    isDeposit,
-    selectedToken,
-    getRequiredUnits,
-    portalsApprove,
-    chainId,
-    checkApproval,
-    sendTransaction,
-    onError,
-  ]);
+  }, [getApprovalTokenAddress, walletAddress, isDeposit, selectedToken, getResolvedRequiredUnits, portalsApprove, chainId, checkApproval, sendTransaction, onError]);
 
   const runExecute = useCallback(async () => {
     if (!walletAddress || !selectedToken.address) return;
@@ -418,6 +514,17 @@ export function useHoldingsTransaction({
       setIsSubmitting(true);
 
       const requiresApproval = !isDeposit || !isNativeEthToken(selectedToken);
+      const inputAmount = await getResolvedRequiredUnits();
+
+      if (new BigNumber(inputAmount).lte(0)) {
+        onError(
+          isDeposit
+            ? "Insufficient USDC balance to deposit."
+            : "Insufficient vault balance to exit.",
+        );
+        return;
+      }
+
       if (requiresApproval) {
         const ready = await waitUntilApprovalReady();
         if (!ready) {
@@ -438,7 +545,7 @@ export function useHoldingsTransaction({
         tokenIn: (isDeposit
           ? selectedToken.address
           : vault.vaultAddress) as string,
-        inputAmount: isDeposit ? getDepositUnits() : getWithdrawUnits(),
+        inputAmount,
         tokenOut: (isDeposit
           ? vault.vaultAddress
           : selectedToken.address) as string,
@@ -519,12 +626,32 @@ export function useHoldingsTransaction({
         setActiveTx({ hash, kind: "execute" });
       }
     } catch (error) {
-      console.error("Transaction error:", error);
-      notifyTxError(error, isDeposit ? "deposit" : "exit", onError, {
-        isCrossAsset: isCrossAssetDeposit(isDeposit, selectedToken, vault),
-      });
+      if (!isUserRejection(error)) {
+        console.error("Transaction error:", error);
+      }
 
-      if (isTransferFromFailed(error) || isPortalsPortalError(error)) {
+      let insufficientOnchainBalance = false;
+      if (isTransferFromFailed(error) && isDeposit) {
+        const balanceError = await getDepositBalanceError(
+          selectedToken.symbol === "WETH" ? "ETH" : selectedToken.symbol,
+        );
+        if (balanceError) {
+          insufficientOnchainBalance = true;
+          onError(balanceError);
+        }
+      }
+
+      if (!insufficientOnchainBalance && !isUserRejection(error)) {
+        notifyTxError(error, isDeposit ? "deposit" : "exit", onError, {
+          isCrossAsset: isCrossAssetDeposit(isDeposit, selectedToken, vault),
+        });
+      }
+
+      if (
+        !insufficientOnchainBalance &&
+        !isUserRejection(error) &&
+        (isTransferFromFailed(error) || isPortalsPortalError(error))
+      ) {
         setIsApprovalReady(false);
         setNeedsApproval(false);
         setIsWaitingForApproval(true);
@@ -546,8 +673,8 @@ export function useHoldingsTransaction({
     onError,
     getPortals,
     chainId,
-    getDepositUnits,
-    getWithdrawUnits,
+    getResolvedRequiredUnits,
+    getDepositBalanceError,
     sendTransaction,
   ]);
 

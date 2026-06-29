@@ -1,6 +1,6 @@
 import BigNumber from "bignumber.js";
 import type { HarvestVaultData, TokenInfo, VaultInfo } from "~/types";
-import { parseTokenUnits } from "~/utilities/parsers";
+import { formatTokenUnits, parseTokenUnits } from "~/utilities/parsers";
 
 export function getSharePriceFromVaultData(
   vaultData: HarvestVaultData | null | undefined,
@@ -32,22 +32,47 @@ export function underlyingToShares(underlying: number, sharePrice: number): numb
   return underlying / sharePrice;
 }
 
+/** Converts vault share base units to underlying token amount (matches exit MAX). */
+export function underlyingFromShareUnits(
+  shareUnits: bigint | string,
+  vaultDecimals: number,
+  sharePrice: number,
+): number {
+  const shares = parseFloat(formatTokenUnits(shareUnits, vaultDecimals));
+  return sharesToUnderlying(shares, sharePrice);
+}
+
 export function getVaultUnderlyingBalance(
   vaultBalance: TokenInfo | null,
   vaultData: HarvestVaultData | null | undefined,
   underlyingDecimals: number,
+  vaultDecimals?: number,
 ): { underlying: number; usd: number } {
-  const shareBalance = parseFloat(vaultBalance?.balance ?? "0");
   const sharePrice = getSharePriceFromVaultData(vaultData, underlyingDecimals);
   const underlyingUsdPrice = getUnderlyingUsdPrice(vaultData);
 
+  // Prefer exact share base units — same math as on-chain exit / MAX.
+  const shareRaw = vaultBalance?.rawBalance;
+  if (shareRaw && vaultDecimals != null && new BigNumber(shareRaw).gt(0)) {
+    const underlying = underlyingFromShareUnits(
+      shareRaw,
+      vaultDecimals,
+      sharePrice,
+    );
+    return {
+      underlying,
+      usd: underlying * underlyingUsdPrice,
+    };
+  }
+
+  const shareBalance = parseFloat(vaultBalance?.balance ?? "0");
   let underlying = sharesToUnderlying(shareBalance, sharePrice);
   let usd = parseFloat(vaultBalance?.balanceUSD ?? "0");
 
-  if (usd > 0 && underlyingUsdPrice > 0) {
-    underlying = usd / underlyingUsdPrice;
-  } else if (underlying > 0) {
+  if (underlying > 0) {
     usd = underlying * underlyingUsdPrice;
+  } else if (usd > 0 && underlyingUsdPrice > 0) {
+    underlying = usd / underlyingUsdPrice;
   }
 
   return { underlying, usd };

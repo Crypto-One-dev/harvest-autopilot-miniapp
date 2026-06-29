@@ -27,16 +27,19 @@ interface VaultDetailProps {
   selectedToken: TokenInfo;
   depositAmount: string;
   withdrawShareAmount: string;
+  amountRawUnits?: string | null;
   vaultBalance: TokenInfo | null;
   walletAddress: string | null;
   isConnected: boolean;
   isConnecting: boolean;
   onTokenSelect: () => void;
   onAmountChange: (amount: string) => void;
-  onMaxAmount: () => void;
+  onMaxAmount: () => void | Promise<void>;
   onConnect: () => void;
   onNotify: (message: string, type?: "error" | "success") => void;
   onSuccess: () => void | Promise<void>;
+  onRefreshBalances?: () => void | Promise<void>;
+  onSyncAmountToLiveMax?: (raw: string, display: string) => void;
 }
 
 const TABS: { id: VaultTab; label: string }[] = [
@@ -57,6 +60,7 @@ export default function VaultDetail({
   selectedToken,
   depositAmount,
   withdrawShareAmount,
+  amountRawUnits = null,
   vaultBalance,
   walletAddress,
   isConnected,
@@ -67,6 +71,8 @@ export default function VaultDetail({
   onConnect,
   onNotify,
   onSuccess,
+  onRefreshBalances,
+  onSyncAmountToLiveMax,
 }: VaultDetailProps): JSX.Element {
   const data = vaultsData?.[vault.id];
   const apy = data ? `${parseFloat(data.estimatedApy).toFixed(2)}%` : null;
@@ -171,6 +177,7 @@ export default function VaultDetail({
             selectedToken={selectedToken}
             depositAmount={depositAmount}
             withdrawShareAmount={withdrawShareAmount}
+            amountRawUnits={amountRawUnits}
             vaultBalance={vaultBalance}
             vaultsData={vaultsData}
             estimatedApy={data?.estimatedApy ?? null}
@@ -183,6 +190,8 @@ export default function VaultDetail({
             onConnect={onConnect}
             onNotify={onNotify}
             onSuccess={onSuccess}
+            onRefreshBalances={onRefreshBalances}
+            onSyncAmountToLiveMax={onSyncAmountToLiveMax}
           />
         )}
 
@@ -194,6 +203,7 @@ export default function VaultDetail({
             selectedToken={selectedToken}
             depositAmount={depositAmount}
             withdrawShareAmount={withdrawShareAmount}
+            amountRawUnits={amountRawUnits}
             vaultBalance={vaultBalance}
             vaultsData={vaultsData}
             walletAddress={walletAddress}
@@ -205,6 +215,8 @@ export default function VaultDetail({
             onConnect={onConnect}
             onNotify={onNotify}
             onSuccess={onSuccess}
+            onRefreshBalances={onRefreshBalances}
+            onSyncAmountToLiveMax={onSyncAmountToLiveMax}
           />
         )}
 
