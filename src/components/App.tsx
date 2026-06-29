@@ -23,9 +23,16 @@ import {
   adjustWalletTokenBalance,
   getSharePriceFromVaultData,
   getVaultUnderlyingBalance,
+  underlyingFromShareUnits,
   underlyingToShares,
 } from "~/utilities/vaultBalances";
 import { useVaultsData } from "~/hooks/useVaultsData";
+import { getOnchainTokenBalance } from "~/utilities/onchainBalance";
+import {
+  formatTokenUnits,
+  formatTokenUnitsForDisplay,
+  formatBalance,
+} from "~/utilities/parsers";
 
 import { SUPPORTED_VAULTS, FALLBACK_TOKEN_ICON } from "~/constants";
 
@@ -53,6 +60,8 @@ export default function App(): JSX.Element {
     rawBalance: "0",
   });
   const [depositAmount, setDepositAmount] = useState<string>("");
+  /** Exact on-chain base units when MAX is used; txs use this instead of rounded display. */
+  const [amountRawUnits, setAmountRawUnits] = useState<string | null>(null);
   const [vaultAddress, setVaultAddress] = useState<`0x${string}` | null>(null);
   const [isConvertTokenModalOpen, setIsConvertTokenModalOpen] = useState(false);
   const [isRevertTokenModalOpen, setIsRevertTokenModalOpen] = useState(false);
@@ -92,20 +101,20 @@ export default function App(): JSX.Element {
   );
 
   // Show notification function
-  const showNotification = (
+  const showNotification = useCallback((
     message: string,
     type: "error" | "success" = "error",
   ) => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 10000); // Auto-hide after 10 seconds
-  };
+  }, []);
 
   // Helper to safely get vault balance
-  const getVaultBalance = (vaultSymbol: string | null): TokenInfo | null => {
+  const getVaultBalance = useCallback((vaultSymbol: string | null): TokenInfo | null => {
     if (!vaultSymbol) return null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return vaultBalances[vaultSymbol as any] || null;
-  };
+  }, [vaultBalances]);
 
   // Set initial vault address for USDC
   useEffect(() => {
@@ -295,6 +304,10 @@ export default function App(): JSX.Element {
     return latest;
   }, [fetchBalances]);
 
+  const refreshDetailBalances = useCallback(async (): Promise<void> => {
+    await fetchBalances(true);
+  }, [fetchBalances]);
+
   const replaceTokenInList = useCallback(
     (list: TokenInfo[], updated: TokenInfo): TokenInfo[] => {
       const address = updated.address?.toLowerCase();
@@ -378,6 +391,7 @@ export default function App(): JSX.Element {
 
     applyOptimisticBalances(txAmount, tab, selectedToken);
     setDepositAmount("");
+    setAmountRawUnits(null);
 
     const updatedBalances = await refreshBalancesAfterTx();
 
@@ -579,6 +593,7 @@ export default function App(): JSX.Element {
     setActiveVault(vault);
     setDetailTab(tab);
     setDepositAmount("");
+    setAmountRawUnits(null);
     setCurrentAction(tab === "exit" ? "withdraw" : "deposit");
 
     if (tab === "exit") {
@@ -600,6 +615,7 @@ export default function App(): JSX.Element {
   const handleDetailTabChange = (tab: VaultTab) => {
     setDetailTab(tab);
     setDepositAmount("");
+    setAmountRawUnits(null);
 
     if (tab === "enter") {
       setCurrentAction("deposit");
@@ -634,27 +650,96 @@ export default function App(): JSX.Element {
     }
   };
 
-  const handleMaxAmount = () => {
-    if (currentAction === "deposit" && selectedToken) {
-      const balance = new BigNumber(selectedToken.rawBalance || "0")
-        .div(new BigNumber(10).pow(selectedToken.decimals))
-        .toString();
-      setDepositAmount(balance);
+  const handleAmountChange = useCallback((amount: string) => {
+    setDepositAmount(amount);
+    setAmountRawUnits(null);
+  }, []);
+
+  const handleSyncAmountToLiveMax = useCallback((raw: string, display: string) => {
+    setAmountRawUnits(raw);
+    setDepositAmount(display);
+  }, []);
+
+  const handleMaxAmount = useCallback(async () => {
+    if (detailTab === "enter" && selectedToken?.address && walletAddress) {
+      try {
+        const onchainUnits = await getOnchainTokenBalance({
+          token: selectedToken.address,
+          owner: walletAddress as `0x${string}`,
+          chainId,
+        });
+        const raw = onchainUnits.toString();
+        const display = formatTokenUnitsForDisplay(
+          onchainUnits,
+          selectedToken.decimals,
+        );
+
+        setAmountRawUnits(raw);
+        setDepositAmount(display);
+        setSelectedToken((prev) => ({
+          ...prev,
+          rawBalance: raw,
+          balance: formatTokenUnits(onchainUnits, selectedToken.decimals),
+        }));
+      } catch (error) {
+        console.warn("Failed to read on-chain balance for MAX:", error);
+        showNotification(
+          "Could not read your wallet balance. Please try again.",
+          "error",
+        );
+      }
       return;
     }
 
-    const vaultBalance = getVaultBalance(selectedVault);
+    if (detailTab !== "exit") return;
+
     const vault =
       activeVault ?? SUPPORTED_VAULTS.find((v) => v.symbol === selectedVault);
-    if (vaultBalance && vault) {
+    if (!vault?.vaultAddress || !walletAddress) return;
+
+    try {
+      const shareUnits = await getOnchainTokenBalance({
+        token: vault.vaultAddress,
+        owner: walletAddress as `0x${string}`,
+        chainId,
+      });
+      const raw = shareUnits.toString();
+      const sharePrice = getSharePriceFromVaultData(
+        vaultsData?.[vault.id],
+        vault.decimals,
+      );
+      const underlying = underlyingFromShareUnits(
+        shareUnits,
+        vault.vaultDecimals,
+        sharePrice,
+      );
+
+      setAmountRawUnits(raw);
+      setDepositAmount(formatBalance(underlying));
+    } catch (error) {
+      console.warn("Failed to read on-chain vault balance for MAX:", error);
+      const vaultBalance = getVaultBalance(selectedVault);
+      if (!vaultBalance) return;
       const { underlying } = getVaultUnderlyingBalance(
         vaultBalance,
         vaultsData?.[vault.id],
         vault.decimals,
+        vault.vaultDecimals,
       );
-      setDepositAmount(underlying.toString());
+      setAmountRawUnits(vaultBalance.rawBalance || "0");
+      setDepositAmount(formatBalance(underlying));
     }
-  };
+  }, [
+    detailTab,
+    selectedToken,
+    walletAddress,
+    chainId,
+    selectedVault,
+    activeVault,
+    vaultsData,
+    getVaultBalance,
+    showNotification,
+  ]);
 
   const handleConnectWallet = () => {
     const connector: Connector | undefined =
@@ -719,11 +804,14 @@ export default function App(): JSX.Element {
               isConnected={isWalletConnected}
               isConnecting={connect.isPending}
               onTokenSelect={handleTokenSelect}
-              onAmountChange={setDepositAmount}
+              onAmountChange={handleAmountChange}
               onMaxAmount={handleMaxAmount}
               onConnect={handleConnectWallet}
               onNotify={showNotification}
               onSuccess={handleDetailSuccess}
+              onRefreshBalances={refreshDetailBalances}
+              amountRawUnits={amountRawUnits}
+              onSyncAmountToLiveMax={handleSyncAmountToLiveMax}
             />
           )
         )}

@@ -90,16 +90,22 @@ function defaultFailureMessage(action: WalletAction): string {
 export function parseWalletError(
   error: unknown,
   action: WalletAction = "transaction",
-  options: { isCrossAsset?: boolean } = {},
+  options: { isCrossAsset?: boolean; insufficientOnchainBalance?: boolean } = {},
 ): string | null {
   if (isUserRejection(error)) {
     return null;
   }
 
   const text = collectErrorText(error);
-  const { isCrossAsset = false } = options;
+  const { isCrossAsset = false, insufficientOnchainBalance = false } = options;
 
   if (text.includes("TRANSFER_FROM_FAILED")) {
+    if (insufficientOnchainBalance) {
+      return action === "exit"
+        ? "Your vault balance changed. Tap MAX again or enter a lower amount."
+        : "Your wallet balance changed. Tap MAX again or enter a lower amount.";
+    }
+
     return action === "exit"
       ? "Approval is still syncing on Base. Wait a few seconds, then tap Exit again."
       : "Approval is still syncing on Base. Wait a few seconds, then tap Deposit again.";

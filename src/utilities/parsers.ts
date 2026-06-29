@@ -1,3 +1,5 @@
+import BigNumber from "bignumber.js";
+
 export function formatTVL(value: string): string {
   const num = parseFloat(value);
   if (num >= 1_000_000) {
@@ -56,4 +58,19 @@ export function parseTokenUnits(value: string, decimals: number): bigint {
   const [whole = "0", fraction = ""] = value.split(".");
   const normalizedFraction = fraction.padEnd(decimals, "0").slice(0, decimals);
   return BigInt(`${whole}${normalizedFraction}`);
+}
+
+/** Full-precision human amount from base units (for internal / on-chain use). */
+export function formatTokenUnits(raw: bigint | string, decimals: number): string {
+  const rawBn = new BigNumber(raw.toString());
+  if (rawBn.isZero()) return "0";
+  return rawBn.div(new BigNumber(10).pow(decimals)).toString();
+}
+
+/** Human amount capped at 6 decimals for UI display. */
+export function formatTokenUnitsForDisplay(
+  raw: bigint | string,
+  decimals: number,
+): string {
+  return formatBalance(formatTokenUnits(raw, decimals));
 }
