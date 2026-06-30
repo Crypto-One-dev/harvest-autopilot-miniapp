@@ -5,6 +5,7 @@ const TOKEN_ICON_MAP: Record<string, string> = {
   ETH: "/images/tokens/eth.svg",
   WETH: "/images/tokens/eth.svg",
   USDC: "/images/tokens/usdc.svg",
+  EURC: "/images/tokens/eurc.svg",
   cbBTC: "/images/tokens/cbbtc.svg",
   CBBTC: "/images/tokens/cbbtc.svg",
 };

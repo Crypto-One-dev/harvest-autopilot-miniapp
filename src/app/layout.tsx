@@ -8,11 +8,11 @@ const domain = BASE_URL ? `https://${BASE_URL}` : "http://localhost:3000";
 export const metadata: Metadata = {
   title: "Harvest - Earn on Autopilot",
   description:
-    "Put your USDC, ETH or cbBTC to work with Autopilot that allocates to the best performing yield sources.",
+    "Put your USDC, EURC, ETH or cbBTC to work with Autopilot that allocates to the best performing yield sources.",
   openGraph: {
     title: "Harvest - Earn on Autopilot",
     description:
-      "Put your USDC, ETH or cbBTC to work with Autopilot that allocates to the best performing yield sources.",
+      "Put your USDC, EURC, ETH or cbBTC to work with Autopilot that allocates to the best performing yield sources.",
     images: [
       {
         url: `${domain}/harvest-thumbnail.png`,
