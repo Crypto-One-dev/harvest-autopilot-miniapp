@@ -5,6 +5,21 @@ export const PORTALS_FI_API_URL = "https://api.portals.fi";
 
 export const SUPPORTED_VAULTS: VaultInfo[] = [
   {
+    symbol: "WETH",
+    name: "Wrapped Ethereum",
+    id: "IPOR_WETH_base",
+    icon: "/images/tokens/eth.svg",
+    address: "0x4200000000000000000000000000000000000006",
+    vaultAddress: "0x7872893e528Fe2c0829e405960db5B742112aa97",
+    decimals: 18,
+    vaultDecimals: 20,
+    balance: "0",
+    balanceUSD: "0",
+    images: ["/images/tokens/eth.svg"],
+    vaultSymbol: "bAutopilot_wETH",
+    rawBalance: "0",
+  },
+  {
     symbol: "USDC",
     name: "USD Coin",
     id: "IPOR_USDC_base",
@@ -20,18 +35,18 @@ export const SUPPORTED_VAULTS: VaultInfo[] = [
     rawBalance: "0",
   },
   {
-    symbol: "WETH",
-    name: "Wrapped Ethereum",
-    id: "IPOR_WETH_base",
-    icon: "/images/tokens/eth.svg",
-    address: "0x4200000000000000000000000000000000000006",
-    vaultAddress: "0x7872893e528Fe2c0829e405960db5B742112aa97",
-    decimals: 18,
-    vaultDecimals: 20,
+    symbol: "EURC",
+    name: "Euro Coin",
+    id: "IPOR_EURC_base",
+    icon: "/images/tokens/eurc.svg",
+    address: "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
+    vaultAddress: "0x180493090667A35D8511Be743835dAD8715d33be",
+    decimals: 6,
+    vaultDecimals: 8,
     balance: "0",
     balanceUSD: "0",
-    images: ["/images/tokens/eth.svg"],
-    vaultSymbol: "bAutopilot_wETH",
+    images: ["/images/tokens/eurc.svg"],
+    vaultSymbol: "bAutopilot_EURC",
     rawBalance: "0",
   },
   {
@@ -54,7 +69,7 @@ export const SUPPORTED_VAULTS: VaultInfo[] = [
 export const FALLBACK_TOKEN_ICON =
   "https://etherscan.io/images/main/empty-token.png";
 
-export const VAULT_DISPLAY_ORDER = ["WETH", "USDC", "cbBTC"] as const;
+export const VAULT_DISPLAY_ORDER = ["WETH", "USDC", "EURC", "cbBTC"] as const;
 
 export const SOCIAL_LINKS = {
   TWITTER: "https://twitter.com/harvest_finance",
@@ -71,6 +86,10 @@ export const VAULT_DISPLAY: Record<
   },
   USDC: {
     title: "USDC Autopilot",
+    subtitle: "Auto-compounding",
+  },
+  EURC: {
+    title: "EURC Autopilot",
     subtitle: "Auto-compounding",
   },
   cbBTC: {

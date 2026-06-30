@@ -35,6 +35,25 @@ export function UsdcIcon({ size = 40 }: { size?: number }): JSX.Element {
   );
 }
 
+export function EurcIcon({ size = 40 }: { size?: number }): JSX.Element {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
+      <circle cx="16" cy="16" r="16" fill="#2775ca" />
+      <text
+        x="16"
+        y="22.4"
+        textAnchor="middle"
+        fontFamily="var(--sans), system-ui, sans-serif"
+        fontWeight="700"
+        fontSize="18"
+        fill="#fff"
+      >
+        €
+      </text>
+    </svg>
+  );
+}
+
 export function CbbtcIcon({ size = 40 }: { size?: number }): JSX.Element {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
@@ -195,6 +214,7 @@ export function VaultIcon({
 }): JSX.Element {
   if (symbol === "WETH" || symbol === "ETH") return <EthIcon size={size} />;
   if (symbol === "USDC") return <UsdcIcon size={size} />;
+  if (symbol === "EURC") return <EurcIcon size={size} />;
   if (symbol === "cbBTC") return <CbbtcIcon size={size} />;
   return <EthIcon size={size} />;
 }

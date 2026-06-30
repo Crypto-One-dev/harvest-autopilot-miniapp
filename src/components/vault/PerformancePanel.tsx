@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { JSX, ReactNode } from "react";
 import type { AllocPointData, VaultInfo } from "~/types";
+import { VAULT_DISPLAY } from "~/constants";
 import { fetchMergedPerformanceChartData } from "~/utilities/chartApiCalls";
 import {
   getBaseExplorerAddressUrl,
@@ -111,11 +112,7 @@ export default function PerformancePanel({
   ];
 
   const displayName =
-    vault.symbol === "WETH"
-      ? "WETH Autopilot"
-      : vault.symbol === "USDC"
-        ? "USDC Autopilot"
-        : "cbBTC Autopilot";
+    VAULT_DISPLAY[vault.symbol]?.title ?? `${vault.symbol} Autopilot`;
 
   return (
     <>
